@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js"
+    "check": "node -e \"const{execFileSync}=require('child_process');const{readdirSync,statSync}=require('fs');const walk=d=>readdirSync(d).flatMap(f=>{const p=d+'/'+f;return statSync(p).isDirectory()?walk(p):p.endsWith('.js')?[p]:[]});for(const f of walk('src'))execFileSync(process.execPath,['--check',f],{stdio:'inherit'});console.log('синтаксис в порядке')\""
   },
   "engines": {
     "node": ">=18"

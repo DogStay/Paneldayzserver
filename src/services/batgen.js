@@ -21,7 +21,7 @@ const SOURCE = 'bat';
  * Аргументы запуска DayZServer_x64.exe.
  * @returns {string[]}
  */
-function buildArgs(cfg = config.load()) {
+function buildArgs(cfg = config.active()) {
   const args = [];
 
   args.push(`-config=${cfg.paths.configFile || 'serverDZ.cfg'}`);
@@ -47,12 +47,12 @@ function quoteArg(arg) {
   return /[\s;&^]/.test(arg) ? `"${arg}"` : arg;
 }
 
-function buildCommandLine(cfg = config.load()) {
+function buildCommandLine(cfg = config.active()) {
   return [quoteArg(cfg.paths.serverExe), ...buildArgs(cfg).map(quoteArg)].join(' ');
 }
 
 /** Текст .bat-файла. */
-function buildBatContent(cfg = config.load()) {
+function buildBatContent(cfg = config.active()) {
   const { clientMods, serverMods } = mods.buildModParams(cfg);
   const stamp = new Date().toLocaleString('ru-RU');
 
@@ -114,7 +114,7 @@ function buildBatContent(cfg = config.load()) {
  * Записать .bat на диск.
  * @returns {{path: string, content: string, written: boolean}}
  */
-function generate(cfg = config.load()) {
+function generate(cfg = config.active()) {
   const target = config.batPath(cfg);
   const content = buildBatContent(cfg);
 
@@ -136,7 +136,7 @@ function generate(cfg = config.load()) {
 }
 
 /** Предпросмотр для веб-интерфейса — без записи на диск. */
-function preview(cfg = config.load()) {
+function preview(cfg = config.active()) {
   return {
     path: config.batPath(cfg),
     content: buildBatContent(cfg),

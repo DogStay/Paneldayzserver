@@ -1,13 +1,14 @@
 'use strict';
 
 /**
- * Логика работы с модами.
+ * Логика работы с модами активного сервера.
  *
- * Скачиванием занимается steamcmd.js, а этот модуль отвечает за «раскладку»:
- *  - определяет PBO-имя мода (@CF, @Community-Online-Tools, ...) из meta.cpp;
+ * Скачиванием занимается steamcmd.js, поиском — workshop.js, а этот модуль
+ * отвечает за состав и раскладку:
+ *  - определяет PBO-имя мода (@CF, @Community-Online-Tools, …) из meta.cpp;
  *  - копирует или симлинкает steamapps/workshop/content/221100/<id> в папку сервера;
  *  - раскладывает .bikey из keys/ мода в <server>/keys;
- *  - собирает строку параметра -mod= / -serverMod= из включённых в панели модов.
+ *  - собирает строку параметра -mod= / -serverMod= из включённых модов.
  */
 
 const fs = require('fs');
@@ -21,10 +22,7 @@ const SOURCE = 'mods';
 
 /* ------------------------------------------------------------------ meta.cpp */
 
-/**
- * Достаём человеческое имя мода из meta.cpp workshop-элемента.
- * Формат: name = "Community Framework";
- */
+/** Имя мода из meta.cpp workshop-элемента: name = "Community Framework"; */
 function readMeta(dir) {
   const meta = { name: '', publishedId: '' };
   const file = path.join(dir, 'meta.cpp');
@@ -42,18 +40,20 @@ function readMeta(dir) {
   return meta;
 }
 
-/** Имя папки мода в каталоге сервера: «Community Framework» -> «@Community Framework». */
+/** «Community Framework» -> «@Community Framework». */
 function folderNameFor(id, metaName) {
-  const raw = (metaName || '').trim();
-  const safe = raw.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim();
+  const safe = String(metaName || '')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   return safe ? `@${safe}` : `@${id}`;
 }
 
 /* --------------------------------------------------------------- сканирование */
 
 /** Что реально скачано в steamapps/workshop/content/<appid>. */
-function scanWorkshop(cfg = config.load()) {
-  const dir = cfg.paths.workshopContentDir;
+function scanWorkshop(v = config.active()) {
+  const dir = v.paths.workshopContentDir;
   const found = [];
   if (!dir || !fs.existsSync(dir)) return found;
 
@@ -73,8 +73,8 @@ function scanWorkshop(cfg = config.load()) {
 }
 
 /** Папки @Mod, уже лежащие в каталоге сервера. */
-function scanServerFolders(cfg = config.load()) {
-  const dir = cfg.paths.serverPath;
+function scanServerFolders(v = config.active()) {
+  const dir = v.paths.serverPath;
   if (!dir || !fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -82,17 +82,16 @@ function scanServerFolders(cfg = config.load()) {
     .map((e) => e.name);
 }
 
-/**
- * Полный список модов для интерфейса: то, что записано в конфиге, обогащённое
- * фактическим состоянием на диске и версией из .acf.
- */
+/** Полный список модов для интерфейса. */
 function list() {
-  const cfg = config.load();
-  const workshop = new Map(scanWorkshop(cfg).map((w) => [w.id, w]));
-  const serverFolders = new Set(scanServerFolders(cfg));
-  const installedState = steamcmd.readInstalledState(cfg);
+  if (!config.hasServers()) return { mods: [], orphans: [] };
 
-  const items = cfg.mods.map((mod) => {
+  const v = config.active();
+  const workshop = new Map(scanWorkshop(v).map((w) => [w.id, w]));
+  const serverFolders = new Set(scanServerFolders(v));
+  const installedState = steamcmd.readInstalledState(v);
+
+  const items = v.mods.map((mod) => {
     const ws = workshop.get(mod.id);
     const state = installedState[mod.id] || {};
     const folder = mod.folder || folderNameFor(mod.id, ws ? ws.metaName : mod.name);
@@ -103,7 +102,7 @@ function list() {
       folder,
       downloaded: Boolean(ws),
       deployed: serverFolders.has(folder),
-      sizeMb: ws ? ws.sizeMb : 0,
+      sizeMb: ws ? ws.sizeMb : Math.round((mod.sizeBytes / 1024 / 1024) * 10) / 10,
       hasKeys: ws ? ws.hasKeys : false,
       workshopPath: ws ? ws.path : '',
       installedManifest: state.manifest || '',
@@ -115,9 +114,7 @@ function list() {
     };
   });
 
-  // Скачанные, но ещё не добавленные в панель — показываем отдельно, чтобы
-  // их можно было подключить в один клик.
-  const known = new Set(cfg.mods.map((m) => m.id));
+  const known = new Set(v.mods.map((m) => m.id));
   const orphans = [...workshop.values()]
     .filter((w) => !known.has(w.id))
     .map((w) => ({
@@ -131,105 +128,62 @@ function list() {
   return { mods: items, orphans };
 }
 
-/* -------------------------------------------------------------- добавление мода */
+/* -------------------------------------------------------------- состав списка */
 
-/**
- * Добавить мод по Workshop ID: скачать через SteamCMD, определить имя и
- * записать в конфиг.
- */
-async function addByWorkshopId(id, opts = {}) {
-  const workshopId = String(id).trim();
-  if (!/^\d+$/.test(workshopId)) {
-    throw new Error('Workshop ID должен состоять только из цифр (например 1559212036)');
-  }
+function saveMods(mods) {
+  config.updateActive({ mods });
+  return mods;
+}
 
-  const cfg = config.load();
-  if (cfg.mods.some((m) => m.id === workshopId)) {
-    throw new Error(`Мод ${workshopId} уже есть в списке`);
-  }
+/** Добавить запись о моде в список (без скачивания). */
+function register(item) {
+  const v = config.active();
+  const id = String(item.id).trim();
+  if (!/^\d+$/.test(id)) throw new Error(`Некорректный Workshop ID: ${item.id}`);
 
-  logger.info(SOURCE, `Добавление мода ${workshopId}: запуск SteamCMD…`);
-  const { results } = await steamcmd.downloadItems([workshopId], { validate: Boolean(opts.validate) });
-  const result = results[0];
-
-  if (!result || result.status === 'failed') {
-    throw new Error(`Не удалось скачать мод ${workshopId}: ${(result && result.error) || 'неизвестная ошибка'}`);
-  }
-
-  const dir = steamcmd.itemPath(workshopId, cfg);
-  const meta = readMeta(dir);
-  const name = meta.name || workshopId;
-  const folder = folderNameFor(workshopId, meta.name);
+  const existing = v.mods.find((m) => m.id === id);
+  if (existing) return existing;
 
   const mod = {
-    id: workshopId,
-    name,
-    folder,
-    enabled: true,
-    type: opts.type === 'server' ? 'server' : 'client',
-    manifest: result.manifest,
-    timeupdated: result.timeupdated,
-    lastUpdateCheck: new Date().toISOString(),
+    id,
+    name: item.name || id,
+    folder: item.folder || '',
+    enabled: item.enabled !== false,
+    type: item.type === 'server' ? 'server' : 'client',
+    manifest: '',
+    timeupdated: 0,
+    sizeBytes: item.sizeBytes || 0,
+    preview: item.preview || '',
     lastDeployed: null,
+    lastUpdateCheck: null,
     missing: false
   };
 
-  config.update({ mods: [...cfg.mods, mod] });
-  logger.info(SOURCE, `Мод добавлен: ${name} (${workshopId}) -> ${folder}`);
-
-  // Сразу раскладываем в папку сервера, чтобы мод был готов к запуску.
-  try {
-    await deploy(mod);
-  } catch (err) {
-    logger.warn(SOURCE, `Мод скачан, но не разложен в папку сервера: ${err.message}`);
-  }
-
+  saveMods([...v.mods, mod]);
+  logger.info(SOURCE, `В список добавлен мод: ${mod.name} (${id})`);
   return mod;
 }
 
-/** Подключить уже скачанный workshop-элемент без обращения к Steam. */
-async function adoptExisting(id, opts = {}) {
-  const workshopId = String(id).trim();
-  const cfg = config.load();
-  if (cfg.mods.some((m) => m.id === workshopId)) throw new Error(`Мод ${workshopId} уже есть в списке`);
-  if (!steamcmd.itemExists(workshopId, cfg)) throw new Error(`Мод ${workshopId} не найден в workshop/content`);
-
-  const dir = steamcmd.itemPath(workshopId, cfg);
-  const meta = readMeta(dir);
-  const state = steamcmd.readInstalledState(cfg)[workshopId] || {};
-
-  const mod = {
-    id: workshopId,
-    name: meta.name || workshopId,
-    folder: folderNameFor(workshopId, meta.name),
-    enabled: true,
-    type: opts.type === 'server' ? 'server' : 'client',
-    manifest: state.manifest || '',
-    timeupdated: state.timeupdated || 0,
-    lastUpdateCheck: null,
-    lastDeployed: null,
-    missing: false
-  };
-
-  config.update({ mods: [...cfg.mods, mod] });
-  logger.info(SOURCE, `Подключён уже скачанный мод: ${mod.name} (${workshopId})`);
-  return mod;
+function patch(id, changes) {
+  const v = config.active();
+  if (!v.mods.some((m) => m.id === String(id))) throw new Error(`Мод ${id} не найден`);
+  const mods = v.mods.map((m) => (m.id === String(id) ? { ...m, ...changes, id: m.id } : m));
+  saveMods(mods);
+  return mods.find((m) => m.id === String(id));
 }
 
 function remove(id, { deleteServerFolder = false } = {}) {
-  const cfg = config.load();
-  const mod = cfg.mods.find((m) => m.id === String(id));
+  const v = config.active();
+  const mod = v.mods.find((m) => m.id === String(id));
   if (!mod) throw new Error(`Мод ${id} не найден в списке`);
 
-  config.update({ mods: cfg.mods.filter((m) => m.id !== String(id)) });
+  saveMods(v.mods.filter((m) => m.id !== String(id)));
 
   if (deleteServerFolder && mod.folder) {
-    const target = path.join(cfg.paths.serverPath, mod.folder);
+    const target = path.join(v.paths.serverPath, mod.folder);
     try {
-      if (fs.existsSync(target)) {
-        fs.rmSync(target, { recursive: true, force: true });
-        logger.info(SOURCE, `Удалена папка мода: ${target}`);
-      }
+      removeIfExists(target);
+      logger.info(SOURCE, `Удалена папка мода: ${target}`);
     } catch (err) {
       logger.warn(SOURCE, `Не удалось удалить ${target}: ${err.message}`);
     }
@@ -240,27 +194,15 @@ function remove(id, { deleteServerFolder = false } = {}) {
 }
 
 function setEnabled(id, enabled) {
-  const cfg = config.load();
-  const mods = cfg.mods.map((m) => (m.id === String(id) ? { ...m, enabled: Boolean(enabled) } : m));
-  if (!cfg.mods.some((m) => m.id === String(id))) throw new Error(`Мод ${id} не найден`);
-  config.update({ mods });
-  const mod = mods.find((m) => m.id === String(id));
+  const mod = patch(id, { enabled: Boolean(enabled) });
   logger.info(SOURCE, `${mod.name}: ${enabled ? 'включён' : 'выключен'}`);
   return mod;
 }
 
-function patch(id, changes) {
-  const cfg = config.load();
-  if (!cfg.mods.some((m) => m.id === String(id))) throw new Error(`Мод ${id} не найден`);
-  const mods = cfg.mods.map((m) => (m.id === String(id) ? { ...m, ...changes, id: m.id } : m));
-  config.update({ mods });
-  return mods.find((m) => m.id === String(id));
-}
-
-/** Изменить порядок модов — он напрямую влияет на порядок в -mod=. */
+/** Порядок модов напрямую влияет на порядок в -mod=. */
 function reorder(orderedIds) {
-  const cfg = config.load();
-  const byId = new Map(cfg.mods.map((m) => [m.id, m]));
+  const v = config.active();
+  const byId = new Map(v.mods.map((m) => [m.id, m]));
   const ordered = [];
   for (const id of orderedIds.map(String)) {
     if (byId.has(id)) {
@@ -268,42 +210,137 @@ function reorder(orderedIds) {
       byId.delete(id);
     }
   }
-  ordered.push(...byId.values()); // всё, что не попало в список, — в конец
-  config.update({ mods: ordered });
+  ordered.push(...byId.values());
+  saveMods(ordered);
   return ordered;
 }
 
-/* ------------------------------------------------------------------ раскладка */
+/** Подключить уже скачанный workshop-элемент без обращения к Steam. */
+function adoptExisting(id, opts = {}) {
+  const v = config.active();
+  const workshopId = String(id).trim();
+  if (v.mods.some((m) => m.id === workshopId)) throw new Error(`Мод ${workshopId} уже есть в списке`);
+  if (!steamcmd.itemExists(workshopId, v)) throw new Error(`Мод ${workshopId} не найден в workshop/content`);
+
+  const meta = readMeta(steamcmd.itemPath(workshopId, v));
+  const state = steamcmd.readInstalledState(v)[workshopId] || {};
+
+  const mod = register({
+    id: workshopId,
+    name: meta.name || workshopId,
+    folder: folderNameFor(workshopId, meta.name),
+    type: opts.type
+  });
+
+  return patch(mod.id, { manifest: state.manifest || '', timeupdated: state.timeupdated || 0 });
+}
+
+/* ---------------------------------------------------- скачивание и раскладка */
+
+/**
+ * Скачать выбранные моды (кнопка «Загрузить» в окне подписки) и разложить их.
+ * @param {Array<{id: string, name?: string, type?: string, preview?: string, sizeBytes?: number}>} items
+ * @param {{onProgress?: (p: {percent: number, step: string}) => void}} [opts]
+ */
+async function downloadMany(items, opts = {}) {
+  const list = items.map((i) => (typeof i === 'string' ? { id: i } : i)).filter((i) => i && i.id);
+  if (!list.length) throw new Error('Список модов пуст');
+
+  for (const item of list) register(item);
+
+  const ids = list.map((i) => String(i.id));
+  const report = { downloaded: [], failed: [], total: ids.length };
+
+  const notify = (percent, step) => opts.onProgress && opts.onProgress({ percent, step });
+  notify(2, `Подготовка загрузки (${ids.length} шт.)`);
+
+  const { results } = await steamcmd.downloadItems(ids, {
+    onProgress: (p) => {
+      if (p.percent !== null) notify(5 + p.percent * 0.8, `${p.phase}: ${Math.round(p.percent)}%`);
+    },
+    onItemDone: (id, done, total) => notify(5 + (done / total) * 80, `Скачано ${done} из ${total}`)
+  });
+
+  notify(88, 'Раскладываю моды в папку сервера');
+
+  const now = new Date().toISOString();
+  for (const result of results) {
+    const v = config.active();
+    const mod = v.mods.find((m) => m.id === result.id);
+    if (!mod) continue;
+
+    if (result.status === 'failed') {
+      patch(mod.id, { lastUpdateCheck: now, missing: true });
+      report.failed.push({ id: mod.id, name: mod.name, error: result.error });
+      logger.error(SOURCE, `✗ ${mod.name} (${mod.id}): ${result.error}`);
+      continue;
+    }
+
+    const meta = readMeta(steamcmd.itemPath(mod.id, v));
+    const updated = patch(mod.id, {
+      name: meta.name || mod.name,
+      folder: mod.folder || folderNameFor(mod.id, meta.name),
+      manifest: result.manifest,
+      timeupdated: result.timeupdated,
+      lastUpdateCheck: now,
+      missing: false
+    });
+
+    try {
+      await deploy(updated, { force: true });
+      report.downloaded.push({ id: updated.id, name: updated.name, status: result.status });
+      logger.info(SOURCE, `✓ ${updated.name} (${updated.id}) готов к использованию`);
+    } catch (err) {
+      report.failed.push({ id: updated.id, name: updated.name, error: err.message });
+      logger.error(SOURCE, `${updated.name}: скачан, но не разложен — ${err.message}`);
+    }
+  }
+
+  notify(100, `Готово: ${report.downloaded.length} из ${report.total}`);
+  return report;
+}
+
+/** Добавление одного мода по Workshop ID (совместимость со старым API). */
+async function addByWorkshopId(id, opts = {}) {
+  const workshopId = String(id).trim();
+  if (!/^\d+$/.test(workshopId)) {
+    throw new Error('Workshop ID должен состоять только из цифр (например 1559212036)');
+  }
+  if (config.active().mods.some((m) => m.id === workshopId)) {
+    throw new Error(`Мод ${workshopId} уже есть в списке`);
+  }
+
+  const report = await downloadMany([{ id: workshopId, type: opts.type }]);
+  if (report.failed.length) throw new Error(report.failed[0].error);
+  return config.active().mods.find((m) => m.id === workshopId);
+}
 
 function findKeysDir(modDir) {
   for (const name of ['keys', 'Keys', 'key', 'Key']) {
     const dir = path.join(modDir, name);
-    if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir;
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir;
+    } catch (_) {
+      /* пропускаем */
+    }
   }
   return null;
 }
 
-/**
- * Скопировать (или симлинкнуть) мод в папку сервера и разложить ключи.
- * @param {object} mod
- * @param {{force?: boolean}} [opts]
- */
+/** Скопировать (или симлинкнуть) мод в папку сервера и разложить ключи. */
 async function deploy(mod, opts = {}) {
-  const cfg = config.load();
-  const source = steamcmd.itemPath(mod.id, cfg);
+  const v = config.active();
+  const source = steamcmd.itemPath(mod.id, v);
   const folder = mod.folder || folderNameFor(mod.id, mod.name);
-  const target = path.join(cfg.paths.serverPath, folder);
+  const target = path.join(v.paths.serverPath, folder);
 
-  if (!cfg.paths.serverPath || !fs.existsSync(cfg.paths.serverPath)) {
-    throw new Error(`Папка сервера не найдена: ${cfg.paths.serverPath}`);
+  if (!v.paths.serverPath || !fs.existsSync(v.paths.serverPath)) {
+    throw new Error(`Папка сервера не найдена: ${v.paths.serverPath}`);
   }
-  if (!fs.existsSync(source)) {
-    throw new Error(`Контент мода не скачан: ${source}`);
-  }
+  if (!fs.existsSync(source)) throw new Error(`Контент мода не скачан: ${source}`);
 
-  const symlink = cfg.features.deployMode === 'symlink';
+  const symlink = v.features.deployMode === 'symlink';
 
-  // Уже симлинк на нужный источник — ничего делать не надо.
   if (symlink && isLinkTo(target, source) && !opts.force) {
     logger.info(SOURCE, `${folder}: симлинк уже актуален`);
   } else {
@@ -317,17 +354,16 @@ async function deploy(mod, opts = {}) {
     }
   }
 
-  copyKeys(source, cfg);
-
+  copyKeys(source, v);
   patch(mod.id, { folder, lastDeployed: new Date().toISOString(), missing: false });
   return target;
 }
 
-function copyKeys(modDir, cfg = config.load()) {
+function copyKeys(modDir, v = config.active()) {
   const keysDir = findKeysDir(modDir);
   if (!keysDir) return 0;
 
-  const targetKeys = path.join(cfg.paths.serverPath, 'keys');
+  const targetKeys = path.join(v.paths.serverPath, 'keys');
   fs.mkdirSync(targetKeys, { recursive: true });
 
   let count = 0;
@@ -342,8 +378,7 @@ function copyKeys(modDir, cfg = config.load()) {
 
 function isLinkTo(target, source) {
   try {
-    const stat = fs.lstatSync(target);
-    if (!stat.isSymbolicLink()) return false;
+    if (!fs.lstatSync(target).isSymbolicLink()) return false;
     return path.resolve(fs.readlinkSync(target)) === path.resolve(source);
   } catch (_) {
     return false;
@@ -362,8 +397,8 @@ function removeIfExists(target) {
 
 /** Разложить все включённые моды (или указанный список). */
 async function deployAll(ids = null) {
-  const cfg = config.load();
-  const targets = cfg.mods.filter((m) => (ids ? ids.includes(m.id) : m.enabled));
+  const v = config.active();
+  const targets = v.mods.filter((m) => (ids ? ids.includes(m.id) : m.enabled));
   const report = [];
 
   for (const mod of targets) {
@@ -382,11 +417,12 @@ async function deployAll(ids = null) {
 
 /**
  * Проверить обновления включённых модов и разложить изменившиеся.
- * @returns {Promise<{checked: number, updated: Array, failed: Array, skipped: boolean}>}
+ * @param {{onProgress?: Function}} [opts]
  */
-async function checkAndUpdate() {
-  const cfg = config.load();
-  const enabled = cfg.mods.filter((m) => m.enabled);
+async function checkAndUpdate(opts = {}) {
+  const v = config.active();
+  const enabled = v.mods.filter((m) => m.enabled);
+  const notify = (percent, step) => opts.onProgress && opts.onProgress({ percent, step });
 
   if (!enabled.length) {
     logger.info(SOURCE, 'Включённых модов нет — проверка обновлений пропущена');
@@ -394,8 +430,14 @@ async function checkAndUpdate() {
   }
 
   logger.info(SOURCE, `Проверка обновлений через SteamCMD для ${enabled.length} мод(ов)…`);
+  notify(5, `Проверяю ${enabled.length} мод(ов)`);
 
-  const { results } = await steamcmd.downloadItems(enabled.map((m) => m.id));
+  const { results } = await steamcmd.downloadItems(enabled.map((m) => m.id), {
+    onProgress: (p) => {
+      if (p.percent !== null) notify(5 + p.percent * 0.8, `${p.phase}: ${Math.round(p.percent)}%`);
+    }
+  });
+
   const updated = [];
   const failed = [];
   const now = new Date().toISOString();
@@ -440,21 +482,17 @@ async function checkAndUpdate() {
   } else {
     logger.info(SOURCE, 'Все включённые моды актуальны');
   }
-  if (failed.length) {
-    logger.warn(SOURCE, `Не удалось обработать модов: ${failed.length}`);
-  }
+  if (failed.length) logger.warn(SOURCE, `Не удалось обработать модов: ${failed.length}`);
 
+  notify(100, updated.length ? `Обновлено: ${updated.length}` : 'Все моды актуальны');
   return { checked: results.length, updated, failed, skipped: false };
 }
 
-/* ------------------------------------------------------- параметры командной строки */
+/* ------------------------------------------------- параметры командной строки */
 
-/**
- * Строки для -mod= и -serverMod= по включённым в панели модам.
- * Порядок соответствует порядку в списке панели.
- */
-function buildModParams(cfg = config.load()) {
-  const enabled = cfg.mods.filter((m) => m.enabled);
+/** Строки для -mod= и -serverMod= по включённым модам, в порядке списка. */
+function buildModParams(v = config.active()) {
+  const enabled = v.mods.filter((m) => m.enabled);
   const folderOf = (m) => m.folder || folderNameFor(m.id, m.name);
 
   const client = enabled.filter((m) => m.type !== 'server').map(folderOf);
@@ -484,7 +522,7 @@ function dirSizeMb(dir) {
         try {
           bytes += fs.statSync(full).size;
         } catch (_) {
-          /* файл исчез — пропускаем */
+          /* файл исчез */
         }
       }
     }
@@ -495,6 +533,8 @@ function dirSizeMb(dir) {
 
 module.exports = {
   list,
+  register,
+  downloadMany,
   addByWorkshopId,
   adoptExisting,
   remove,

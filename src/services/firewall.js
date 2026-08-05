@@ -38,7 +38,7 @@ function execNetsh(args) {
  * Список правил, которые нужны серверу при текущих настройках.
  * @returns {Array<{name: string, protocol: 'UDP'|'TCP', localport: string, comment: string}>}
  */
-function desiredRules(cfg = config.load()) {
+function desiredRules(cfg = config.active()) {
   const rules = [];
   const seen = new Set();
 
@@ -66,7 +66,7 @@ function desiredRules(cfg = config.load()) {
 }
 
 /** Правило для самого исполняемого файла сервера (полезно при NAT/динамических портах). */
-function programRule(cfg = config.load()) {
+function programRule(cfg = config.active()) {
   return {
     name: `${RULE_PREFIX}DayZServer.exe`,
     program: config.serverExePath(cfg)
@@ -83,7 +83,7 @@ async function ruleExists(name) {
  * @param {{force?: boolean}} [opts] force — пересоздать даже существующие
  */
 async function apply(opts = {}) {
-  const cfg = config.load();
+  const cfg = config.active();
   const rules = desiredRules(cfg);
   const report = { created: [], skipped: [], failed: [], platform: process.platform };
 
@@ -176,7 +176,7 @@ async function apply(opts = {}) {
 
 /** Текущее состояние правил панели — для отображения в интерфейсе. */
 async function status() {
-  const cfg = config.load();
+  const cfg = config.active();
   const rules = desiredRules(cfg);
 
   if (!isWindows()) {
@@ -200,7 +200,7 @@ async function removeAll() {
     logger.warn(SOURCE, 'Удаление правил доступно только в Windows');
     return { removed: 0, supported: false };
   }
-  const cfg = config.load();
+  const cfg = config.active();
   const names = [...desiredRules(cfg).map((r) => r.name), programRule(cfg).name];
   let removed = 0;
   for (const name of names) {
@@ -218,7 +218,7 @@ async function removeAll() {
  * администратора и правила нужно применить вручную.
  */
 function generateBat() {
-  const cfg = config.load();
+  const cfg = config.active();
   const rules = desiredRules(cfg);
   const prog = programRule(cfg);
 

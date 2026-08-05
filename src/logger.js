@@ -3,12 +3,10 @@
 /**
  * Централизованный лог панели.
  *
- * - хранит кольцевой буфер последних N строк (для отдачи при открытии страницы);
- * - рассылает новые строки всем подписчикам (SSE-подключения веб-интерфейса);
- * - дублирует всё в консоль и в файл logs/panel.log.
- *
- * Модуль намеренно не зависит ни от Express, ни от конфига, чтобы его можно
- * было подключать из любого сервиса без циклических зависимостей.
+ * - хранит кольцевой буфер последних N строк (отдаётся при открытии страницы);
+ * - рассылает новые строки подписчикам (SSE-поток веб-интерфейса);
+ * - пишет всё в файл logs/panel-ГГГГ-ММ-ДД.log — именно эти файлы попадают
+ *   в диагностический отчёт, который можно приложить к вопросу о проблеме.
  */
 
 const fs = require('fs');
@@ -16,50 +14,80 @@ const path = require('path');
 const { EventEmitter } = require('events');
 
 const LOG_DIR = path.join(__dirname, '..', 'logs');
-const LOG_FILE = path.join(LOG_DIR, 'panel.log');
 
 const emitter = new EventEmitter();
 emitter.setMaxListeners(0);
 
 let buffer = [];
-let maxLines = 2000;
+let maxLines = 3000;
 let seq = 0;
-let fileStream = null;
+let stream = null;
+let streamDay = '';
 
-function ensureFileStream() {
-  if (fileStream) return fileStream;
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function currentFile() {
+  return path.join(LOG_DIR, `panel-${today()}.log`);
+}
+
+function ensureStream() {
+  const day = today();
+  if (stream && streamDay === day) return stream;
+
+  if (stream) {
+    stream.end();
+    stream = null;
+  }
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    fileStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+    stream = fs.createWriteStream(currentFile(), { flags: 'a' });
+    streamDay = day;
+    cleanupOldFiles();
   } catch (err) {
-    // Логи в файл — не критично, продолжаем без них.
     console.error('[logger] не удалось открыть файл лога:', err.message);
-    fileStream = null;
+    stream = null;
   }
-  return fileStream;
+  return stream;
+}
+
+/** Держим логи за последние 14 дней — этого хватает для разбора проблем. */
+function cleanupOldFiles(keepDays = 14) {
+  try {
+    const limit = Date.now() - keepDays * 24 * 3600 * 1000;
+    for (const file of fs.readdirSync(LOG_DIR)) {
+      if (!/^panel-\d{4}-\d{2}-\d{2}\.log$/.test(file)) continue;
+      const full = path.join(LOG_DIR, file);
+      if (fs.statSync(full).mtimeMs < limit) fs.unlinkSync(full);
+    }
+  } catch (_) {
+    /* чистка логов не должна ломать работу панели */
+  }
 }
 
 function setMaxLines(n) {
-  if (Number.isFinite(n) && n > 50) {
+  if (Number.isFinite(n) && n > 100) {
     maxLines = Math.floor(n);
     trim();
   }
 }
 
 function trim() {
-  if (buffer.length > maxLines) {
-    buffer = buffer.slice(buffer.length - maxLines);
-  }
+  if (buffer.length > maxLines) buffer = buffer.slice(buffer.length - maxLines);
 }
 
 /**
- * @param {'info'|'warn'|'error'|'server'|'steamcmd'|'firewall'|'mods'} source
+ * @param {string} source   panel | server | steamcmd | mods | firewall | bat | workshop | install
  * @param {string} message
  * @param {'info'|'warn'|'error'} [level]
+ * @param {{serverId?: string, jobId?: string}} [meta]
  */
-function log(source, message, level = 'info') {
+function log(source, message, level = 'info', meta = {}) {
   const text = String(message == null ? '' : message).replace(/\s+$/, '');
   if (!text) return;
+
+  const file = ensureStream();
 
   for (const line of text.split(/\r?\n/)) {
     const entry = {
@@ -67,13 +95,13 @@ function log(source, message, level = 'info') {
       ts: new Date().toISOString(),
       source,
       level,
-      message: line
+      message: line,
+      ...(meta.serverId ? { serverId: meta.serverId } : {}),
+      ...(meta.jobId ? { jobId: meta.jobId } : {})
     };
     buffer.push(entry);
     emitter.emit('line', entry);
-
-    const stream = ensureFileStream();
-    if (stream) stream.write(`${entry.ts} [${source}] ${line}\n`);
+    if (file) file.write(`${entry.ts} [${level.toUpperCase().padEnd(5)}] [${source}] ${line}\n`);
   }
   trim();
 
@@ -83,16 +111,14 @@ function log(source, message, level = 'info') {
   else console.log(prefix, text);
 }
 
-const info = (source, msg) => log(source, msg, 'info');
-const warn = (source, msg) => log(source, msg, 'warn');
-const error = (source, msg) => log(source, msg, 'error');
+const info = (source, msg, meta) => log(source, msg, 'info', meta);
+const warn = (source, msg, meta) => log(source, msg, 'warn', meta);
+const error = (source, msg, meta) => log(source, msg, 'error', meta);
 
-/** Последние строки буфера (для первичной загрузки страницы). */
-function tail(count = 300) {
-  return buffer.slice(-count);
-}
+/** Последние строки буфера. */
+const tail = (count = 400) => buffer.slice(-count);
 
-/** Строки, появившиеся после указанного id (для дозагрузки после реконнекта). */
+/** Строки, появившиеся после указанного id. */
 function since(id) {
   const from = Number(id) || 0;
   return buffer.filter((e) => e.id > from);
@@ -108,4 +134,30 @@ function subscribe(handler) {
   return () => emitter.off('line', handler);
 }
 
-module.exports = { log, info, warn, error, tail, since, clear, subscribe, setMaxLines, LOG_FILE };
+/** Файлы логов панели (для диагностического отчёта). */
+function logFiles() {
+  try {
+    return fs
+      .readdirSync(LOG_DIR)
+      .filter((f) => f.endsWith('.log'))
+      .map((f) => path.join(LOG_DIR, f))
+      .sort();
+  } catch (_) {
+    return [];
+  }
+}
+
+module.exports = {
+  log,
+  info,
+  warn,
+  error,
+  tail,
+  since,
+  clear,
+  subscribe,
+  setMaxLines,
+  logFiles,
+  currentFile,
+  LOG_DIR
+};

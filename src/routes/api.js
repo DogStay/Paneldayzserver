@@ -1,25 +1,46 @@
 'use strict';
 
 /**
- * HTTP API панели. Только маршрутизация и валидация входных данных —
+ * HTTP API панели. Здесь только маршрутизация и валидация входных данных —
  * вся логика живёт в src/services/*.
+ *
+ * Длительные операции (установка сервера, загрузка модов, запуск) не держат
+ * HTTP-соединение: они возвращают job.id, а прогресс приходит в браузер
+ * через SSE-поток /api/stream.
  */
 
 const express = require('express');
 
 const config = require('../config');
 const logger = require('../logger');
+const bus = require('../events');
+
+const jobs = require('../services/jobs');
 const steamcmd = require('../services/steamcmd');
+const workshop = require('../services/workshop');
+const instances = require('../services/instances');
 const mods = require('../services/mods');
 const batgen = require('../services/batgen');
 const firewall = require('../services/firewall');
 const serverCfg = require('../services/serverCfg');
 const serverProcess = require('../services/serverProcess');
+const diagnostics = require('../services/diagnostics');
 
 const router = express.Router();
 
-/** Обёртка, чтобы не писать try/catch в каждом обработчике. */
 const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+
+/** id сервера из запроса: ?serverId=… или активный. */
+function serverIdOf(req) {
+  const id = req.query.serverId || (req.body && req.body.serverId);
+  if (id) {
+    if (!config.getServer(id)) throw new Error(`Сервер ${id} не найден`);
+    return id;
+  }
+  const active = config.activeServer();
+  if (!active) throw new Error('Сервер не выбран. Создайте сервер в панели.');
+  return active.id;
+}
 
 /* ------------------------------------------------------------------- статус */
 
@@ -27,20 +48,157 @@ router.get(
   '/status',
   wrap(async (req, res) => {
     const cfg = config.load();
+    const active = config.activeServer();
+
     res.json({
-      server: serverProcess.getStatus(),
+      hasServers: cfg.servers.length > 0,
+      activeServerId: cfg.activeServerId,
+      servers: serversOverview(),
+      statuses: serverProcess.allStatuses(),
+      server: active ? serverProcess.getStatus(active.id) : null,
+      problems: active ? serverProcess.validate(active.id) : [],
       steamcmd: steamcmd.health(),
-      problems: serverProcess.validate(cfg),
+      jobs: jobs.active(),
       panel: {
         version: require('../../package.json').version,
         platform: process.platform,
-        node: process.version
-      },
-      counts: {
-        mods: cfg.mods.length,
-        enabled: cfg.mods.filter((m) => m.enabled).length
+        node: process.version,
+        isWindows: process.platform === 'win32'
       }
     });
+  })
+);
+
+/** Краткая сводка по каждому серверу — для экрана со списком. */
+function serversOverview() {
+  return config.servers().map((s) => {
+    const status = serverProcess.getStatus(s.id);
+    return {
+      id: s.id,
+      name: s.name,
+      installed: s.installed,
+      createdAt: s.createdAt,
+      serverPath: s.paths.serverPath,
+      gamePort: s.server.gamePort,
+      steamQueryPort: s.server.steamQueryPort,
+      maxPlayers: s.server.maxPlayers,
+      mission: s.server.mission,
+      hasPassword: Boolean(s.server.password),
+      modsTotal: s.mods.length,
+      modsEnabled: s.mods.filter((m) => m.enabled).length,
+      status: status.status,
+      uptimeSec: status.uptimeSec,
+      lastError: status.lastError,
+      lastCrashReport: status.lastCrashReport
+    };
+  });
+}
+
+/* ------------------------------------------------------------------ серверы */
+
+router.get('/servers', (req, res) => {
+  res.json({ servers: serversOverview(), activeServerId: config.load().activeServerId });
+});
+
+router.get('/servers/suggest', (req, res) => {
+  const ports = instances.suggestPorts();
+  res.json({
+    ...ports,
+    serverPath: instances.suggestPath(req.query.name || 'DayZServer'),
+    missions: serverCfg.MISSIONS
+  });
+});
+
+/** Создать сервер и сразу запустить установку файлов через SteamCMD. */
+router.post(
+  '/servers',
+  wrap(async (req, res) => {
+    const input = req.body || {};
+    const server = instances.create(input);
+
+    if (input.install === false) {
+      return res.json({ server, job: null, servers: serversOverview() });
+    }
+
+    const job = jobs.run(
+      {
+        type: 'install-server',
+        title: `Установка сервера «${server.name}»`,
+        serverId: server.id,
+        onCancel: () => steamcmd.cancel()
+      },
+      async (j) =>
+        config.withServer(server.id, () =>
+          instances.install(server.id, {
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent ?? undefined, step: p.step })
+          })
+        )
+    );
+
+    res.json({ server, job, servers: serversOverview() });
+  })
+);
+
+/** Переустановить/дозакачать файлы сервера. */
+router.post(
+  '/servers/:id/install',
+  wrap(async (req, res) => {
+    const server = config.getServer(req.params.id);
+    if (!server) return res.status(404).json({ error: 'Сервер не найден' });
+
+    const job = jobs.run(
+      {
+        type: 'install-server',
+        title: `Обновление файлов сервера «${server.name}»`,
+        serverId: server.id,
+        onCancel: () => steamcmd.cancel()
+      },
+      async (j) =>
+        config.withServer(server.id, () =>
+          instances.install(server.id, {
+            validate: req.body && req.body.validate !== false,
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent ?? undefined, step: p.step })
+          })
+        )
+    );
+
+    res.json({ job });
+  })
+);
+
+router.post(
+  '/servers/:id/activate',
+  wrap(async (req, res) => {
+    config.setActive(req.params.id);
+    res.json({ activeServerId: req.params.id, servers: serversOverview() });
+  })
+);
+
+router.patch(
+  '/servers/:id',
+  wrap(async (req, res) => {
+    const patch = { ...(req.body || {}) };
+    delete patch.id;
+    delete patch.mods;
+
+    const updated = config.updateServer(req.params.id, patch);
+    // Название сервера в конфиге DayZ следует за названием в панели.
+    if (patch.name && (!patch.server || patch.server.name === undefined)) {
+      config.updateServer(req.params.id, { server: { name: patch.name } });
+    }
+    logger.info('panel', `Настройки сервера «${updated.name}» сохранены`);
+    res.json({ server: config.getServer(req.params.id), servers: serversOverview() });
+  })
+);
+
+router.delete(
+  '/servers/:id',
+  wrap(async (req, res) => {
+    if (serverProcess.isRunning(req.params.id)) {
+      return res.status(409).json({ error: 'Сначала остановите сервер' });
+    }
+    instances.remove(req.params.id, { deleteFiles: req.query.deleteFiles === '1' });
+    res.json({ servers: serversOverview(), activeServerId: config.load().activeServerId });
   })
 );
 
@@ -50,47 +208,80 @@ router.get('/config', (req, res) => {
   res.json(config.publicView());
 });
 
+/** Глобальные настройки: панель, SteamCMD, аккаунт Steam. */
 router.put(
   '/config',
   wrap(async (req, res) => {
-    const patch = req.body || {};
+    const patch = { ...(req.body || {}) };
 
-    // Пустая строка пароля означает «не менять», а не «стереть».
+    // Пустая строка секрета означает «не менять», а не «стереть».
     if (patch.steam && patch.steam.password === '') delete patch.steam.password;
-    delete patch.mods; // список модов меняется только через /mods/*
+    if (patch.steam && patch.steam.webApiKey === '') delete patch.steam.webApiKey;
+    delete patch.servers;
+    delete patch.activeServerId;
 
-    const previousWorkshop = config.load().paths.workshopContentDir;
-    const previousSteamcmd = config.load().paths.steamcmdExe;
-
-    // Если поменяли steamcmd.exe, а путь к workshop не задавали руками —
-    // пересчитываем его от нового расположения steamcmd.
-    if (patch.paths && patch.paths.steamcmdExe && patch.paths.steamcmdExe !== previousSteamcmd) {
-      const derivedOld = config.deriveWorkshopDir(config.load());
-      if (!patch.paths.workshopContentDir && previousWorkshop === derivedOld) {
+    const before = config.load();
+    if (patch.paths && patch.paths.steamcmdExe && patch.paths.steamcmdExe !== before.paths.steamcmdExe) {
+      // Путь к workshop пересчитываем, если пользователь не задавал его вручную.
+      if (!patch.paths.workshopContentDir && before.paths.workshopContentDir === config.deriveWorkshopDir(before)) {
         patch.paths.workshopContentDir = '';
       }
     }
 
-    const next = config.update(patch);
-    logger.info('panel', 'Настройки сохранены');
+    const next = config.updateRoot(patch);
     logger.setMaxLines(next.panel.logBufferLines);
+    logger.info('panel', 'Общие настройки сохранены');
     res.json(config.publicView());
   })
 );
 
 /* -------------------------------------------------------------------- моды */
 
-router.get('/mods', (req, res) => {
-  res.json(mods.list());
-});
-
-router.post(
+router.get(
   '/mods',
   wrap(async (req, res) => {
-    const { id, type, validate } = req.body || {};
-    if (!id) return res.status(400).json({ error: 'Не указан Workshop ID' });
-    const mod = await mods.addByWorkshopId(id, { type, validate });
-    res.json({ mod, ...mods.list() });
+    res.json(mods.list());
+  })
+);
+
+/** Поиск в Workshop по названию или ID/ссылке. */
+router.get(
+  '/workshop/search',
+  wrap(async (req, res) => {
+    const query = String(req.query.q || '').trim();
+    const page = parseInt(req.query.page, 10) || 1;
+    res.json(await workshop.search(query, { page }));
+  })
+);
+
+/** Кнопка «Загрузить» в окне подписки: скачивание выбранных модов. */
+router.post(
+  '/mods/download',
+  wrap(async (req, res) => {
+    const items = (req.body || {}).items || [];
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({ error: 'Не выбрано ни одного мода' });
+    }
+    const serverId = serverIdOf(req);
+    const server = config.getServer(serverId);
+
+    const job = jobs.run(
+      {
+        type: 'download-mods',
+        title: `Загрузка модов (${items.length}) для «${server.name}»`,
+        serverId,
+        total: items.length,
+        onCancel: () => steamcmd.cancel()
+      },
+      async (j) =>
+        config.withServer(serverId, () =>
+          mods.downloadMany(items, {
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
+          })
+        )
+    );
+
+    res.json({ job });
   })
 );
 
@@ -99,7 +290,7 @@ router.post(
   wrap(async (req, res) => {
     const { id, type } = req.body || {};
     if (!id) return res.status(400).json({ error: 'Не указан Workshop ID' });
-    const mod = await mods.adoptExisting(id, { type });
+    const mod = mods.adoptExisting(id, { type });
     res.json({ mod, ...mods.list() });
   })
 );
@@ -117,16 +308,30 @@ router.post(
 router.post(
   '/mods/update',
   wrap(async (req, res) => {
-    const report = await mods.checkAndUpdate();
-    res.json({ report, ...mods.list() });
+    const serverId = serverIdOf(req);
+    const job = jobs.run(
+      {
+        type: 'update-mods',
+        title: 'Проверка обновлений модов',
+        serverId,
+        onCancel: () => steamcmd.cancel()
+      },
+      async (j) =>
+        config.withServer(serverId, () =>
+          mods.checkAndUpdate({
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
+          })
+        )
+    );
+    res.json({ job });
   })
 );
 
 router.post(
   '/mods/deploy',
   wrap(async (req, res) => {
-    const ids = (req.body || {}).ids || null;
-    const report = await mods.deployAll(ids);
+    const serverId = serverIdOf(req);
+    const report = await config.withServer(serverId, () => mods.deployAll((req.body || {}).ids || null));
     res.json({ report, ...mods.list() });
   })
 );
@@ -135,14 +340,12 @@ router.patch(
   '/mods/:id',
   wrap(async (req, res) => {
     const body = req.body || {};
-    if (Object.prototype.hasOwnProperty.call(body, 'enabled')) {
-      mods.setEnabled(req.params.id, body.enabled);
-    }
+    if (Object.prototype.hasOwnProperty.call(body, 'enabled')) mods.setEnabled(req.params.id, body.enabled);
+
     const allowed = {};
-    for (const key of ['name', 'folder', 'type']) {
-      if (body[key] !== undefined) allowed[key] = body[key];
-    }
+    for (const key of ['name', 'folder', 'type']) if (body[key] !== undefined) allowed[key] = body[key];
     if (Object.keys(allowed).length) mods.patch(req.params.id, allowed);
+
     res.json(mods.list());
   })
 );
@@ -157,108 +360,142 @@ router.delete(
 
 /* -------------------------------------------------------------------- .bat */
 
-router.get('/bat', (req, res) => {
-  res.json(batgen.preview());
-});
+router.get('/bat', wrap(async (req, res) => res.json(batgen.preview(config.active(serverIdOf(req))))));
 
-router.post(
-  '/bat',
-  wrap(async (req, res) => {
-    res.json(batgen.generate());
-  })
-);
+router.post('/bat', wrap(async (req, res) => res.json(batgen.generate(config.active(serverIdOf(req))))));
 
 /* --------------------------------------------------------------- брандмауэр */
 
-router.get(
-  '/firewall',
-  wrap(async (req, res) => {
-    res.json(await firewall.status());
-  })
-);
+router.get('/firewall', wrap(async (req, res) => res.json(await firewall.status())));
 
 router.post(
   '/firewall/apply',
-  wrap(async (req, res) => {
-    res.json(await firewall.apply({ force: (req.body || {}).force === true }));
-  })
+  wrap(async (req, res) => res.json(await firewall.apply({ force: (req.body || {}).force === true })))
 );
 
-router.post('/firewall/bat', (req, res) => {
-  res.json(firewall.generateBat());
-});
+router.post('/firewall/bat', (req, res) => res.json(firewall.generateBat()));
 
-router.delete(
-  '/firewall',
-  wrap(async (req, res) => {
-    res.json(await firewall.removeAll());
-  })
-);
+router.delete('/firewall', wrap(async (req, res) => res.json(await firewall.removeAll())));
 
 /* ------------------------------------------------------------- serverDZ.cfg */
 
-router.get('/servercfg', (req, res) => {
-  res.json(serverCfg.read());
-});
+router.get('/servercfg', wrap(async (req, res) => res.json(serverCfg.read(serverIdOf(req)))));
 
 router.put(
   '/servercfg',
   wrap(async (req, res) => {
     const content = (req.body || {}).content;
     if (typeof content !== 'string') return res.status(400).json({ error: 'Ожидалось поле content' });
-    res.json(serverCfg.write(content));
+    res.json(serverCfg.write(content, serverIdOf(req)));
   })
 );
 
-router.post(
-  '/servercfg/sync',
-  wrap(async (req, res) => {
-    res.json(serverCfg.sync());
-  })
-);
+router.post('/servercfg/sync', wrap(async (req, res) => res.json(serverCfg.sync(serverIdOf(req)))));
 
 /* ------------------------------------------------------------------- сервер */
 
 router.post(
   '/server/start',
   wrap(async (req, res) => {
-    const result = await serverProcess.start({ skipUpdate: (req.body || {}).skipUpdate === true });
-    res.json(result);
+    const serverId = serverIdOf(req);
+    const server = config.getServer(serverId);
+
+    const job = jobs.run(
+      { type: 'start-server', title: `Запуск сервера «${server.name}»`, serverId },
+      async (j) =>
+        config.withServer(serverId, () =>
+          serverProcess.start(serverId, {
+            skipUpdate: (req.body || {}).skipUpdate === true,
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
+          })
+        )
+    );
+
+    res.json({ job });
   })
 );
 
 router.post(
   '/server/stop',
-  wrap(async (req, res) => {
-    res.json(await serverProcess.stop({ force: (req.body || {}).force !== false }));
-  })
+  wrap(async (req, res) => res.json(await serverProcess.stop(serverIdOf(req), { force: (req.body || {}).force !== false })))
 );
 
 router.post(
   '/server/restart',
   wrap(async (req, res) => {
-    res.json(await serverProcess.restart({ skipUpdate: (req.body || {}).skipUpdate === true }));
+    const serverId = serverIdOf(req);
+    const server = config.getServer(serverId);
+
+    const job = jobs.run(
+      { type: 'restart-server', title: `Перезапуск сервера «${server.name}»`, serverId },
+      async (j) =>
+        config.withServer(serverId, () =>
+          serverProcess.restart(serverId, {
+            skipUpdate: (req.body || {}).skipUpdate === true,
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
+          })
+        )
+    );
+
+    res.json({ job });
   })
 );
+
+/* ----------------------------------------------------------------- задачи */
+
+router.get('/jobs', (req, res) => res.json(jobs.list()));
+
+router.get('/jobs/:id', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Задача не найдена' });
+  res.json(job);
+});
+
+router.post('/jobs/:id/cancel', (req, res) => res.json({ cancelled: jobs.cancel(req.params.id) }));
 
 /* ----------------------------------------------------------------- SteamCMD */
 
+router.post('/steamcmd/cancel', (req, res) => res.json({ cancelled: steamcmd.cancel() }));
+
+/* -------------------------------------------------------------- диагностика */
+
+router.get('/diagnostics', (req, res) => res.json({ reports: diagnostics.listReports() }));
+
+/** Собрать отчёт и сохранить его в корень папки панели. */
 router.post(
-  '/steamcmd/update-server',
+  '/diagnostics',
   wrap(async (req, res) => {
-    res.json(await steamcmd.updateServerApp());
+    const report = diagnostics.writeReport({ statuses: serverProcess.allStatuses() });
+    res.json({ ...report, reports: diagnostics.listReports() });
   })
 );
 
-router.post('/steamcmd/cancel', (req, res) => {
-  res.json({ cancelled: steamcmd.cancel() });
-});
+router.get(
+  '/diagnostics/:name',
+  wrap(async (req, res) => {
+    const report = diagnostics.readReport(req.params.name);
+    if (req.query.download === '1') {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${report.name}"`);
+      return res.send(report.content);
+    }
+    res.json(report);
+  })
+);
+
+router.delete(
+  '/diagnostics/:name',
+  wrap(async (req, res) => {
+    diagnostics.removeReport(req.params.name);
+    res.json({ reports: diagnostics.listReports() });
+  })
+);
 
 /* --------------------------------------------------------------------- логи */
 
 router.get('/logs', (req, res) => {
   const since = parseInt(req.query.since, 10);
-  res.json(Number.isFinite(since) ? logger.since(since) : logger.tail(500));
+  res.json(Number.isFinite(since) ? logger.since(since) : logger.tail(600));
 });
 
 router.delete('/logs', (req, res) => {
@@ -266,8 +503,8 @@ router.delete('/logs', (req, res) => {
   res.json({ ok: true });
 });
 
-/** Живой поток лога и статуса (Server-Sent Events). */
-router.get('/logs/stream', (req, res) => {
+/** Единый живой поток: лог, статусы серверов, прогресс задач. */
+router.get('/stream', (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
@@ -282,17 +519,27 @@ router.get('/logs/stream', (req, res) => {
   };
 
   const since = parseInt(req.query.since, 10);
-  send('backlog', Number.isFinite(since) ? logger.since(since) : logger.tail(300));
-  send('status', serverProcess.getStatus());
+  send('backlog', Number.isFinite(since) ? logger.since(since) : logger.tail(400));
+  send('statuses', serverProcess.allStatuses());
+  jobs.active().forEach((job) => send('job', job));
 
   const offLog = logger.subscribe((entry) => send('log', entry));
-  const offStatus = serverProcess.onStatus((status) => send('status', status));
+  const onStatus = (status) => send('status', status);
+  const onJob = (job) => send('job', job);
+  const onServers = () => send('servers', serversOverview());
+
+  bus.on('status', onStatus);
+  bus.on('job', onJob);
+  bus.on('servers', onServers);
+
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
 
   req.on('close', () => {
     clearInterval(heartbeat);
     offLog();
-    offStatus();
+    bus.off('status', onStatus);
+    bus.off('job', onJob);
+    bus.off('servers', onServers);
   });
 });
 

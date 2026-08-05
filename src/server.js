@@ -16,17 +16,15 @@ const config = require('./config');
 const logger = require('./logger');
 const api = require('./routes/api');
 const serverProcess = require('./services/serverProcess');
+const diagnostics = require('./services/diagnostics');
 
 const cfg = config.load();
 logger.setMaxLines(cfg.panel.logBufferLines);
 
 const app = express();
 
-app.use(express.json({ limit: '2mb' }));
 app.disable('x-powered-by');
-
-// Панель не имеет авторизации, поэтому при слушании на 0.0.0.0 предупреждаем
-// в логе, а запросы с внешних адресов принимаем только осознанно.
+app.use(express.json({ limit: '4mb' }));
 app.use('/api', api);
 
 app.use(
@@ -42,21 +40,32 @@ const host = cfg.panel.host || '127.0.0.1';
 const port = cfg.panel.port || 8787;
 
 const httpServer = app.listen(port, host, () => {
-  logger.info('panel', '='.repeat(58));
-  logger.info('panel', `DayZ Panel запущена: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
+  const shown = host === '0.0.0.0' ? 'localhost' : host;
+  logger.info('panel', '═'.repeat(60));
+  logger.info('panel', `DayZ Panel запущена: http://${shown}:${port}`);
   logger.info('panel', `Платформа: ${process.platform}, Node ${process.version}`);
-  logger.info('panel', `Конфиг: ${config.CONFIG_FILE}`);
+  logger.info('panel', `Конфиг:    ${config.CONFIG_FILE}`);
+  logger.info('panel', `Логи:      ${logger.currentFile()}`);
+  logger.info('panel', `Отчёты:    ${diagnostics.ROOT}\\diagnostic-report-*.txt`);
+
   if (host === '0.0.0.0') {
     logger.warn('panel', 'Панель слушает все интерфейсы и не имеет пароля — не выставляйте её в интернет');
   }
   if (process.platform !== 'win32') {
     logger.warn('panel', 'Панель запущена не в Windows: netsh и запуск DayZServer_x64.exe работать не будут');
   }
-  const problems = serverProcess.validate(cfg);
-  if (problems.length) {
-    logger.warn('panel', `Требуется настройка: ${problems.join('; ')}`);
+
+  const servers = config.servers();
+  if (!servers.length) {
+    logger.info('panel', 'Серверов пока нет — нажмите «Создать сервер» в панели');
+  } else {
+    for (const server of servers) {
+      const problems = serverProcess.validate(server.id);
+      if (problems.length) logger.warn('panel', `«${server.name}»: ${problems.join('; ')}`);
+      else logger.info('panel', `«${server.name}»: готов к запуску (порт ${server.server.gamePort})`);
+    }
   }
-  logger.info('panel', '='.repeat(58));
+  logger.info('panel', '═'.repeat(60));
 });
 
 httpServer.on('error', (err) => {
@@ -80,11 +89,12 @@ async function shutdown(signal) {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
 process.on('uncaughtException', (err) => {
   logger.error('panel', `Необработанная ошибка: ${err.stack || err.message}`);
 });
 process.on('unhandledRejection', (reason) => {
-  logger.error('panel', `Необработанный rejection: ${reason && reason.message ? reason.message : reason}`);
+  logger.error('panel', `Необработанный rejection: ${reason && reason.stack ? reason.stack : reason}`);
 });
 
 module.exports = app;
