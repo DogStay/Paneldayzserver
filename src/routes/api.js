@@ -368,6 +368,34 @@ router.post(
   })
 );
 
+/** Перекачать один мод целиком (для модов, установленных переносом). */
+router.post(
+  '/mods/:id/force-update',
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const server = config.getServer(serverId);
+    const mod = config.active(serverId).mods.find((m) => m.id === req.params.id);
+    if (!mod) return res.status(404).json({ error: 'Мод не найден' });
+
+    const job = jobs.run(
+      {
+        type: 'download-mods',
+        title: `Перезагрузка «${mod.name}» для «${server.name}»`,
+        serverId,
+        onCancel: () => steamcmd.cancel()
+      },
+      async (j) =>
+        config.withServer(serverId, () =>
+          mods.forceUpdate(mod.id, {
+            onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
+          })
+        )
+    );
+
+    res.json({ job });
+  })
+);
+
 router.post(
   '/mods/deploy',
   wrap(async (req, res) => {

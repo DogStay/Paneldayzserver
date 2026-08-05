@@ -208,6 +208,9 @@ function modRow(mod) {
   else if (!mod.deployed) badges.push('<span class="badge warn">не разложен</span>');
   else badges.push(`<span class="badge ok">${icon('check')} готов</span>`);
   if (mod.updateAvailable) badges.push('<span class="badge warn">есть обновление</span>');
+  if (mod.manualInstall) {
+    badges.push('<span class="badge violet" title="Мод перенесён панелью из downloads: SteamCMD скачал его целиком, но не установил. Автопроверка обновлений для него выключена, чтобы не качать гигабайты заново.">установлен переносом</span>');
+  }
   if (mod.hasKeys) badges.push('<span class="badge">keys</span>');
 
   const thumb = mod.preview && !isLocal
@@ -239,6 +242,10 @@ function modRow(mod) {
           ? ''
           : `<a class="btn btn-sm btn-ghost btn-icon" href="https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.id}"
                target="_blank" rel="noreferrer" title="Открыть в Workshop">${icon('external')}</a>`}
+        ${mod.manualInstall
+          ? `<button class="btn btn-sm" data-act="force" title="Скачать мод заново целиком">
+               ${icon('download')} Обновить принудительно</button>`
+          : ''}
         <button class="btn btn-sm" data-act="type" title="Переключить между -mod и -serverMod">
           ${mod.type === 'server' ? '→ клиентский' : '→ серверный'}</button>
         <button class="btn btn-sm btn-ghost btn-icon" data-act="remove" title="Удалить мод">${icon('trash')}</button>
@@ -257,6 +264,18 @@ function modRow(mod) {
     busy(e.currentTarget, async () => {
       await api.patchMod(mod.id, { type: mod.type === 'server' ? 'client' : 'server' });
       await refreshMods();
+    })
+  );
+
+  row.querySelector('[data-act="force"]')?.addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const { job } = await api.forceUpdateMod(mod.id);
+      toast(`«${mod.name}»: качаю заново, следите за прогрессом`, 'info');
+      await awaitJob(job.id)
+        .then(() => toast(`«${mod.name}» обновлён`, 'ok'))
+        .catch((err) => toast(`Не удалось обновить: ${err.message}`, 'err', 14000));
+      await refreshMods();
+      await refreshServers();
     })
   );
 

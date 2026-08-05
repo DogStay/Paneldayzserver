@@ -429,8 +429,19 @@ async function downloadMany(items, opts = {}) {
       manifest: result.manifest,
       timeupdated: result.timeupdated,
       lastUpdateCheck: now,
-      missing: false
+      missing: false,
+      manualInstall: Boolean(result.rescued && !result.registered)
     });
+
+    if (result.rescued) {
+      logger.warn(
+        SOURCE,
+        result.registered
+          ? `${updated.name}: установлен переносом из downloads, SteamCMD уведомлён — обновления будут проверяться как обычно`
+          : `${updated.name}: установлен переносом из downloads. Автопроверка обновлений для него отключена, ` +
+              'иначе SteamCMD скачивал бы весь мод заново. Обновляйте кнопкой «Обновить принудительно» в строке мода.'
+      );
+    }
 
     try {
       await deploy(updated, { force: true });
@@ -444,6 +455,24 @@ async function downloadMany(items, opts = {}) {
 
   notify(100, `Готово: ${report.downloaded.length} из ${report.total}`);
   return report;
+}
+
+/**
+ * Принудительно перекачать один мод, даже если он помечен как установленный
+ * переносом. Нужен, когда автор обновил тяжёлый мод и его надо обновить руками.
+ */
+async function forceUpdate(id, opts = {}) {
+  const v = config.active();
+  const mod = v.mods.find((m) => m.id === String(id));
+  if (!mod) throw new Error(`Мод ${id} не найден`);
+  if (mod.source === 'local') throw new Error('Локальные моды не качаются из Workshop');
+
+  patch(mod.id, { manualInstall: false });
+  logger.info(SOURCE, `${mod.name}: принудительная перезагрузка мода`);
+
+  const report = await downloadMany([{ id: mod.id, name: mod.name, sizeBytes: mod.sizeBytes, type: mod.type }], opts);
+  if (report.failed.length) throw new Error(report.failed[0].error);
+  return config.active().mods.find((m) => m.id === mod.id);
 }
 
 /** Добавление одного мода по Workshop ID (совместимость со старым API). */
@@ -582,9 +611,25 @@ async function deployAll(ids = null) {
 async function checkAndUpdate(opts = {}) {
   const v = config.active();
   const enabledAll = v.mods.filter((m) => m.enabled);
-  const enabled = enabledAll.filter((m) => m.source !== 'local');
+  const enabled = enabledAll.filter((m) => m.source !== 'local' && !m.manualInstall);
   const local = enabledAll.filter((m) => m.source === 'local');
+  const manual = enabledAll.filter((m) => m.source !== 'local' && m.manualInstall);
   const notify = (percent, step) => opts.onProgress && opts.onProgress({ percent, step });
+
+  if (manual.length) {
+    logger.info(
+      SOURCE,
+      `Пропускаю проверку обновлений для модов, установленных переносом: ${manual.map((m) => m.name).join(', ')}. ` +
+        'SteamCMD скачал бы их целиком заново.'
+    );
+    for (const mod of manual) {
+      try {
+        await deploy(mod);
+      } catch (err) {
+        logger.error(SOURCE, `${mod.name}: ${err.message}`);
+      }
+    }
+  }
 
   // Локальные моды в Steam не проверяются, но разложить их всё равно надо.
   for (const mod of local) {
@@ -716,6 +761,7 @@ module.exports = {
   addLocal,
   scanLocalCandidates,
   downloadMany,
+  forceUpdate,
   addByWorkshopId,
   adoptExisting,
   remove,

@@ -297,12 +297,194 @@ function dirSize(dir) {
   return bytes;
 }
 
+/** Свободное место на томе, где лежит workshop-контент. */
+function freeSpace(dir) {
+  try {
+    const stat = fs.statfsSync(dir);
+    return stat.bavail * stat.bsize;
+  } catch (_) {
+    return 0;
+  }
+}
+
 const formatBytes = (bytes) => {
   if (!bytes) return '0 Б';
   const units = ['Б', 'КБ', 'МБ', 'ГБ'];
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
 };
+
+
+/* ------------------------------------------- спасение докачанного мода */
+
+/**
+ * Состояние незавершённой закачки из appworkshop_<appid>.acf.
+ * @returns {{downloaded: number, total: number}|null}
+ */
+function readDownloadingState(id, v = config.active()) {
+  const file = acfPath(v);
+  if (!file || !fs.existsSync(file)) return null;
+
+  try {
+    const parsed = vdf.parse(fs.readFileSync(file, 'utf8'));
+    const section = vdf.findSection(parsed, 'WorkshopItemsDownloading') || {};
+    const entry = section[String(id)];
+    if (!entry || typeof entry !== 'object') return null;
+
+    return {
+      downloaded: parseInt(entry.BytesDownloaded, 10) || 0,
+      total: parseInt(entry.BytesToDownload, 10) || 0,
+      manifest: String(entry.manifest || '')
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Похоже ли содержимое папки на полноценный мод DayZ. */
+function looksLikeMod(dir) {
+  if (!dir || !fs.existsSync(dir)) return false;
+  const hasMeta = fs.existsSync(path.join(dir, 'meta.cpp'));
+  const addons = ['addons', 'Addons'].map((n) => path.join(dir, n)).find((p) => fs.existsSync(p));
+  if (!hasMeta || !addons) return false;
+  try {
+    return fs.readdirSync(addons).length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * SteamCMD на тяжёлых модах регулярно докачивает файл до конца, но падает на
+ * финальном переносе из steamapps/workshop/downloads в .../content — папка
+ * мода так и не появляется, хотя все гигабайты уже на диске.
+ *
+ * Здесь панель доводит дело до конца сама: проверяет, что закачка полная,
+ * и переносит папку на место. Ровно то, что админы делают руками.
+ *
+ * @param {string} id
+ * @param {{expectedBytes?: number, label?: string}} [opts]
+ * @returns {{rescued: boolean, reason?: string, registered?: boolean}}
+ */
+function rescueDownloadedItem(id, opts = {}) {
+  const v = config.active();
+  const from = downloadDir(id, v);
+  const to = itemPath(id, v);
+  const label = opts.label || `мод ${id}`;
+
+  if (!from || !fs.existsSync(from)) return { rescued: false, reason: 'нет папки downloads' };
+  if (!looksLikeMod(from)) return { rescued: false, reason: 'в downloads нет meta.cpp и addons — закачка неполная' };
+
+  // Полнота проверяется по состоянию SteamCMD, а если его нет — по ожидаемому
+  // размеру мода из Workshop. Без подтверждения переносить нельзя: рискуем
+  // «установить» половину мода.
+  const state = readDownloadingState(id, v);
+  const onDisk = dirSize(from);
+  let complete = null;
+
+  if (state && state.total > 0) complete = state.downloaded >= state.total;
+  else if (opts.expectedBytes > 0) complete = onDisk >= opts.expectedBytes * 0.99;
+
+  if (complete !== true) {
+    if (complete === false) {
+      // Сколько всего ждём: точнее знает SteamCMD, иначе берём размер из Workshop.
+      const total = state && state.total > 0 ? state.total : opts.expectedBytes || 0;
+      const share = total ? Math.round((onDisk / total) * 100) : 0;
+      return {
+        rescued: false,
+        reason: total
+          ? `скачано ${formatBytes(onDisk)} из ${formatBytes(total)} (${share}%) — закачка не завершена` +
+            (share >= 90 ? ', запустите загрузку ещё раз, чтобы докачать остаток' : '')
+          : `на диске ${formatBytes(onDisk)}, закачка не завершена`
+      };
+    }
+    return { rescued: false, reason: 'не удалось подтвердить, что закачка полная' };
+  }
+
+  logger.warn(
+    SOURCE,
+    `${label}: SteamCMD скачал ${formatBytes(onDisk)}, но не перенёс мод на место. Переношу сам.`
+  );
+
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    if (fs.existsSync(to)) fs.rmSync(to, { recursive: true, force: true });
+
+    try {
+      fs.renameSync(from, to); // один том — мгновенно
+    } catch (err) {
+      if (err.code !== 'EXDEV') throw err;
+      fs.cpSync(from, to, { recursive: true });
+      fs.rmSync(from, { recursive: true, force: true });
+    }
+  } catch (err) {
+    return { rescued: false, reason: `не удалось перенести папку: ${err.message}` };
+  }
+
+  if (!itemExists(id, v)) return { rescued: false, reason: 'после переноса папка мода всё равно пуста' };
+
+  logger.info(SOURCE, `${label}: мод установлен из докачанного архива (${formatBytes(onDisk)})`);
+  const registered = registerInstalled(id, v, onDisk);
+
+  return { rescued: true, registered };
+}
+
+/**
+ * Отметить мод установленным в appworkshop_<appid>.acf.
+ *
+ * Без этой записи SteamCMD считает мод неустановленным и при следующей
+ * проверке снова качает все гигабайты. Значения берём только реальные — из
+ * секции WorkshopItemDetails, которую SteamCMD заполнил сам; выдумывать
+ * manifest нельзя. Правка точечная, оригинал сохраняется рядом.
+ */
+function registerInstalled(id, v, sizeBytes) {
+  const file = acfPath(v);
+  if (!file || !fs.existsSync(file)) return false;
+
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    const parsed = vdf.parse(raw);
+
+    const installed = vdf.findSection(parsed, 'WorkshopItemsInstalled') || {};
+    if (installed[String(id)]) return true; // уже отмечен
+
+    const details = vdf.findSection(parsed, 'WorkshopItemDetails') || {};
+    const entry = details[String(id)];
+    if (!entry || !entry.manifest) {
+      logger.warn(
+        SOURCE,
+        'В файле состояния SteamCMD нет данных о версии мода — отметить его установленным не получилось. ' +
+          'Панель не будет проверять для него обновления автоматически.'
+      );
+      return false;
+    }
+
+    const block =
+      `		"${id}"
+		{
+` +
+      `			"manifest"		"${entry.manifest}"
+` +
+      `			"timeupdated"		"${entry.timeupdated || Math.floor(Date.now() / 1000)}"
+` +
+      `			"size"		"${sizeBytes}"
+		}
+`;
+
+    const marker = raw.match(/"WorkshopItemsInstalled"\s*\r?\n\s*\{\r?\n/);
+    if (!marker) return false;
+
+    fs.copyFileSync(file, `${file}.backup`);
+    const patched = raw.slice(0, marker.index + marker[0].length) + block + raw.slice(marker.index + marker[0].length);
+    fs.writeFileSync(file, patched, 'utf8');
+
+    logger.info(SOURCE, `Мод ${id} отмечен установленным в файле состояния SteamCMD`);
+    return true;
+  } catch (err) {
+    logger.warn(SOURCE, `Не удалось отметить мод установленным: ${err.message}`);
+    return false;
+  }
+}
 
 /**
  * Скачать один мод, при необходимости — за несколько попыток.
@@ -323,6 +505,21 @@ async function downloadItem(id, opts = {}) {
   const maxAttempts = Math.max(1, parseInt(cfg.steam.downloadRetries, 10) || 5);
   const timeoutMs = (parseInt(cfg.steam.downloadTimeoutMinutes, 10) || 180) * 60 * 1000;
   const label = opts.label || `мод ${id}`;
+
+  // SteamCMD держит мод дважды: сначала в downloads, потом в content.
+  // На 8-гигабайтном моде это 16+ ГБ, и нехватка места выглядит как
+  // «скачалось, но не установилось» — предупреждаем заранее.
+  if (opts.expectedBytes > 0) {
+    const free = freeSpace(config.workshopRoot(v));
+    if (free > 0 && free < opts.expectedBytes * 2.2) {
+      logger.warn(
+        SOURCE,
+        `${label}: на диске свободно ${formatBytes(free)}, а моду нужно около ` +
+          `${formatBytes(opts.expectedBytes * 2.2)} (SteamCMD хранит копию в downloads и в content). ` +
+          'Установка может не завершиться — освободите место.'
+      );
+    }
+  }
 
   let lastError = null;
 
@@ -352,8 +549,9 @@ async function downloadItem(id, opts = {}) {
     const watcher = watchSize(id, v, opts.expectedBytes, opts.onProgress, label);
 
     let output = '';
+    let code = 0;
     try {
-      ({ output } = await run(args, { timeoutMs, onProgress: opts.onProgress }));
+      ({ output, code } = await run(args, { timeoutMs, onProgress: opts.onProgress }));
     } finally {
       watcher.stop();
     }
@@ -363,7 +561,18 @@ async function downloadItem(id, opts = {}) {
       return { ok: true, output, attempts: attempt };
     }
 
-    lastError = detectItemError(output, id) || detectError(output) || 'SteamCMD не создал папку мода';
+    // Тяжёлые моды SteamCMD часто скачивает целиком, но не переносит на место.
+    // Если в downloads лежит полная копия — доводим установку сами.
+    const rescue = rescueDownloadedItem(id, { expectedBytes: opts.expectedBytes, label });
+    if (rescue.rescued) {
+      return { ok: true, output, attempts: attempt, rescued: true, registered: rescue.registered };
+    }
+
+    lastError =
+      detectItemError(output, id) ||
+      detectError(output) ||
+      `SteamCMD завершился с кодом ${code}, папка мода не появилась`;
+    if (rescue.reason) logger.info(SOURCE, `${label}: перенос из downloads не выполнен — ${rescue.reason}`);
 
     if (!isRetryable(lastError)) {
       logger.error(SOURCE, `${label}: ${lastError} — повтор не поможет`);
@@ -486,6 +695,15 @@ async function downloadItems(items, opts = {}) {
 
     if (!outcome.ok) {
       results.push({ id: item.id, status: 'failed', manifest: next.manifest, timeupdated: next.timeupdated, error: outcome.error });
+    } else if (outcome.rescued) {
+      results.push({
+        id: item.id,
+        status: 'installed',
+        manifest: next.manifest,
+        timeupdated: next.timeupdated,
+        rescued: true,
+        registered: Boolean(outcome.registered)
+      });
     } else {
       const changed =
         (next.manifest && next.manifest !== prev.manifest) ||
@@ -565,6 +783,7 @@ module.exports = {
   downloadItem,
   downloadItems,
   downloadDir,
+  rescueDownloadedItem,
   readInstalledState,
   itemPath,
   itemExists,

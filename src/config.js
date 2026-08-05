@@ -243,7 +243,11 @@ function normalize(cfg) {
         preview: m.preview || '',
         lastDeployed: m.lastDeployed || null,
         lastUpdateCheck: m.lastUpdateCheck || null,
-        missing: Boolean(m.missing)
+        missing: Boolean(m.missing),
+        // Мод перенесён панелью из downloads вручную, а отметить его
+        // установленным в файле состояния SteamCMD не удалось. Автопроверка
+        // обновлений для него выключена, иначе SteamCMD качал бы его заново.
+        manualInstall: Boolean(m.manualInstall)
       }))
       .filter((m) => m.id);
 

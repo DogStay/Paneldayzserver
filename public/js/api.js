@@ -60,6 +60,7 @@ export const api = {
   deleteMod: (id, deleteFiles) => request('DELETE', `/mods/${id}${deleteFiles ? '?deleteFiles=1' : ''}`),
   reorderMods: (ids) => request('POST', '/mods/reorder', { ids }),
   updateMods: () => request('POST', '/mods/update', {}),
+  forceUpdateMod: (id) => request('POST', `/mods/${id}/force-update`, {}),
   deployMods: () => request('POST', '/mods/deploy', {}),
 
   startServer: (opts) => request('POST', '/server/start', opts ?? {}),
