@@ -8,10 +8,35 @@
  */
 
 import { api } from '../api.js';
-import { state, on, refreshMods, refreshServers, awaitJob } from '../store.js';
+import { state, on, activeStatus, refreshMods, refreshServers, awaitJob } from '../store.js';
 import { el, esc, icon, modal, toast, busy, confirmDialog, fmtBytes, fmtDate, fmtUnix, fmtNumber } from '../ui.js';
 
 let paneRef = null;
+
+/**
+ * Пока сервер запущен, Windows держит .pbo модов открытыми и заменить папку
+ * мода невозможно (EPERM). Спрашиваем разрешение остановить сервер на время
+ * раскладки и запустить его снова — сам по себе сервер панель не трогает.
+ *
+ * @returns {Promise<{go: boolean, stopServer: boolean}>}
+ */
+export async function askStopServer(action = 'разложить моды') {
+  if (activeStatus().status !== 'running') return { go: true, stopServer: false };
+
+  const ok = await confirmDialog({
+    title: 'Сервер запущен',
+    subtitle: 'Файлы модов заняты процессом сервера',
+    icon: 'alert',
+    message:
+      `Чтобы ${esc(action)}, панели нужно заменить папки модов, а запущенный сервер держит их файлы открытыми.<br><br>` +
+      'Загрузка из Steam идёт при работающем сервере; <b>остановлен он будет только на время раскладки</b>, ' +
+      'после чего панель <b>запустит его снова</b>. Игроки на эти минуты отключатся.',
+    confirmText: 'Остановить и разложить',
+    cancelText: 'Отмена'
+  });
+
+  return { go: ok, stopServer: ok };
+}
 
 export function initModsTab(pane) {
   paneRef = pane;
@@ -60,7 +85,10 @@ export function initModsTab(pane) {
 
   pane.querySelector('#mods-update').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
-      const { job } = await api.updateMods();
+      const ask = await askStopServer('обновить моды');
+      if (!ask.go) return;
+
+      const { job } = await api.updateMods({ stopServer: ask.stopServer });
       toast('Проверяю обновления через SteamCMD…', 'info');
       const done = await awaitJob(job.id).catch((err) => {
         toast(err.message, 'err');
@@ -78,7 +106,10 @@ export function initModsTab(pane) {
 
   pane.querySelector('#mods-deploy').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
-      const data = await api.deployMods();
+      const ask = await askStopServer('разложить моды');
+      if (!ask.go) return;
+
+      const data = await api.deployMods({ stopServer: ask.stopServer });
       const bad = data.report.filter((r) => !r.ok);
       toast(bad.length ? `Не разложено: ${bad.length}` : 'Моды разложены в папку сервера', bad.length ? 'err' : 'ok');
       render(data);
@@ -269,7 +300,10 @@ function modRow(mod) {
 
   row.querySelector('[data-act="force"]')?.addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
-      const { job } = await api.forceUpdateMod(mod.id);
+      const ask = await askStopServer(`переустановить «${mod.name}»`);
+      if (!ask.go) return;
+
+      const { job } = await api.forceUpdateMod(mod.id, { stopServer: ask.stopServer });
       toast(`«${mod.name}»: качаю заново, следите за прогрессом`, 'info');
       await awaitJob(job.id)
         .then(() => toast(`«${mod.name}» обновлён`, 'ok'))
@@ -643,7 +677,13 @@ export function openSearchModal() {
 
     downloadBtn.classList.add('loading');
     try {
-      const { job } = await api.downloadMods(items);
+      const ask = await askStopServer('установить моды');
+      if (!ask.go) {
+        downloadBtn.classList.remove('loading');
+        return;
+      }
+
+      const { job } = await api.downloadMods(items, { stopServer: ask.stopServer });
       showDownloadProgress(m, items.length, job.id);
     } catch (err) {
       downloadBtn.classList.remove('loading');

@@ -16,7 +16,7 @@ import {
   fmtUptime, fmtDate, animateNumber, STATUS_LABEL
 } from '../ui.js';
 
-import { initModsTab } from './mods.js';
+import { initModsTab, askStopServer } from './mods.js';
 import { initSettingsTab } from './settings.js';
 import { initToolsTabs } from './tools.js';
 import { initDiagnosticsTab } from './diagnostics.js';
@@ -321,12 +321,17 @@ function bindOverviewActions(server) {
   });
 
   bind('ov-update', async () => {
-    await api.updateMods();
+    const ask = await askStopServer('обновить моды');
+    if (!ask.go) return;
+    await api.updateMods({ stopServer: ask.stopServer });
     toast('Проверка обновлений запущена', 'info');
   });
 
   bind('ov-deploy', async () => {
-    const data = await api.deployMods();
+    const ask = await askStopServer('разложить моды');
+    if (!ask.go) return;
+
+    const data = await api.deployMods({ stopServer: ask.stopServer });
     const bad = data.report.filter((r) => !r.ok);
     toast(bad.length ? `Не разложено модов: ${bad.length}` : 'Моды разложены в папку сервера', bad.length ? 'err' : 'ok');
   });
@@ -370,9 +375,13 @@ function bindOverviewActions(server) {
 
     node.addEventListener('click', (e) =>
       busy(e.currentTarget, async () => {
-        const { job } = await api.downloadMods([
-          { id: issue.action.workshopId, name: issue.action.name, type: 'client' }
-        ]);
+        const ask = await askStopServer(`установить «${issue.action.name}»`);
+        if (!ask.go) return;
+
+        const { job } = await api.downloadMods(
+          [{ id: issue.action.workshopId, name: issue.action.name, type: 'client' }],
+          { stopServer: ask.stopServer }
+        );
         toast(`Скачиваю «${issue.action.name}»…`, 'info');
 
         await awaitJob(job.id).catch((err) => {

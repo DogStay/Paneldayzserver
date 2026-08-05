@@ -173,6 +173,10 @@ function normalize(cfg) {
   c.steam.downloadRetries = clamp(toInt(c.steam.downloadRetries, 5), 1, 30);
   c.steam.downloadTimeoutMinutes = clamp(toInt(c.steam.downloadTimeoutMinutes, 180), 5, 1440);
 
+  // Сколько модов уходит в SteamCMD за один вход в Steam. Чем больше — тем
+  // меньше входов и тем дальше «Rate Limit Exceeded».
+  c.steam.batchSize = clamp(toInt(c.steam.batchSize, 25), 1, 100);
+
   c.servers = (Array.isArray(c.servers) ? c.servers : []).map((raw) => {
     const s = merge(defaults.serverTemplate, raw);
     s.id = s.id || newId();

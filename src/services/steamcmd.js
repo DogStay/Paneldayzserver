@@ -26,6 +26,25 @@ const vdf = require('../util/vdf');
 const SOURCE = 'steamcmd';
 
 let running = null; // одновременно допускается один процесс steamcmd
+let cancelRequested = false; // отмена работает и во время пауз между входами
+
+/**
+ * Steam считает не скачанные гигабайты, а попытки входа. Отдельный
+ * +login на каждый мод — верный способ получить «Rate Limit Exceeded»
+ * уже на шестом моде коллекции, после чего не скачивается ничего.
+ *
+ * Отсюда два правила:
+ *   1. моды качаются пачкой — один вход на всю коллекцию;
+ *   2. между входами выдерживается пауза, а если Steam всё же ограничил
+ *      вход — панель ждёт и продолжает сама, а не сдаётся.
+ */
+// Множитель пауз. В работе всегда 1; автотесты ускоряют ожидание,
+// чтобы не ждать по десять минут ради проверки логики.
+const WAIT_SCALE = Math.min(1, Math.max(0.0001, Number(process.env.DAYZPANEL_WAIT_SCALE) || 1));
+const MIN_LOGIN_GAP_MS = 5_000 * WAIT_SCALE;
+const RATE_LIMIT_WAITS_MS = [60_000, 180_000, 300_000, 600_000].map((ms) => ms * WAIT_SCALE);
+const MAX_RATE_LIMIT_HITS = 6; // дальше ждать бесполезно — нужен перерыв в полчаса
+const loginGate = { lastLoginAt: 0, cooldownUntil: 0, hits: 0 };
 
 /* ------------------------------------------------------------------- пути */
 
@@ -211,6 +230,7 @@ function translatePhase(phase) {
 }
 
 function cancel() {
+  cancelRequested = true; // прерывает и ожидание паузы между входами
   if (!running) return false;
   logger.warn(SOURCE, 'Остановка SteamCMD по запросу пользователя');
   try {
@@ -222,6 +242,75 @@ function cancel() {
 }
 
 /* ---------------------------------------------------------------- логин */
+
+/** Пауза, которую можно прервать кнопкой «Отмена». */
+async function sleepUnlessCancelled(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (cancelRequested) throw new Error('Операция отменена пользователем');
+    await delay(Math.min(1000, until - Date.now()));
+  }
+  if (cancelRequested) throw new Error('Операция отменена пользователем');
+}
+
+const formatDuration = (ms) => {
+  const sec = Math.round(ms / 1000);
+  return sec >= 60 ? `${Math.round(sec / 60)} мин` : `${sec} с`;
+};
+
+/**
+ * Дождаться момента, когда Steam примет очередной вход.
+ * Пауза короткая в обычной работе и длинная — после «Rate Limit Exceeded».
+ */
+async function awaitLoginSlot(label = '') {
+  // Если Steam отбивает вход раз за разом даже после долгих пауз — дальше
+  // молотить бессмысленно: аккаунт заблокирован на вход на десятки минут.
+  if (loginGate.hits >= MAX_RATE_LIMIT_HITS) {
+    throw new Error(
+      'Steam перестал принимать вход (Rate Limit Exceeded) даже после долгих пауз. ' +
+        'Подождите 30–60 минут и запустите загрузку заново — уже скачанное не пропадёт.'
+    );
+  }
+
+  const now = Date.now();
+  const cooldown = Math.max(0, loginGate.cooldownUntil - now);
+  const gap = Math.max(0, MIN_LOGIN_GAP_MS - (now - loginGate.lastLoginAt));
+  const waitMs = Math.max(cooldown, gap);
+
+  if (waitMs >= 15_000) {
+    logger.warn(
+      SOURCE,
+      `${label ? `${label}: ` : ''}Steam ограничил частоту входов. ` +
+        `Жду ${formatDuration(waitMs)} и продолжу автоматически — закрывать панель не нужно.`
+    );
+  }
+  if (waitMs > 0) await sleepUnlessCancelled(waitMs);
+
+  loginGate.lastLoginAt = Date.now();
+}
+
+/** Запомнить, чем закончился вход: успех сбрасывает штраф, отказ — увеличивает. */
+function noteLoginOutcome(output) {
+  if (/Rate Limit Exceeded/i.test(output)) {
+    const wait = RATE_LIMIT_WAITS_MS[Math.min(loginGate.hits, RATE_LIMIT_WAITS_MS.length - 1)];
+    loginGate.hits += 1;
+    loginGate.cooldownUntil = Date.now() + wait;
+    logger.warn(SOURCE, `Steam отказал во входе (Rate Limit). Следующая попытка — через ${formatDuration(wait)}.`);
+    return;
+  }
+  if (/to Steam Public\s*\.*\s*OK/i.test(output) || /Waiting for user info\.*\s*OK/i.test(output)) {
+    loginGate.hits = 0;
+    loginGate.cooldownUntil = 0;
+  }
+}
+
+/** run() + учёт ограничений Steam на частоту входов. */
+async function runWithLogin(args, opts = {}) {
+  await awaitLoginSlot(opts.label);
+  const result = await run(args, opts);
+  noteLoginOutcome(result.output);
+  return result;
+}
 
 function loginArgs(cfg = config.load()) {
   if (cfg.steam.anonymous || !cfg.steam.username) return ['+login', 'anonymous'];
@@ -253,7 +342,12 @@ async function installServerApp(targetDir, opts = {}) {
   if (opts.validate !== false) args.push('validate');
   args.push('+quit');
 
-  const { code, output } = await run(args, { onProgress: opts.onProgress, timeoutMs: 4 * 60 * 60 * 1000 });
+  cancelRequested = false;
+  const { code, output } = await runWithLogin(args, {
+    onProgress: opts.onProgress,
+    timeoutMs: 4 * 60 * 60 * 1000,
+    label: 'установка сервера'
+  });
 
   const failure = detectError(output);
   if (failure) throw new Error(failure);
@@ -546,12 +640,16 @@ async function downloadItem(id, opts = {}) {
 
     // Пока SteamCMD молчит, следим за размером папки — для больших модов это
     // единственный честный признак того, что процесс жив и что-то качает.
-    const watcher = watchSize(id, v, opts.expectedBytes, opts.onProgress, label);
+    const watcher = watchCurrent(
+      () => ({ id, name: label, label, sizeBytes: opts.expectedBytes }),
+      v,
+      opts.onProgress
+    );
 
     let output = '';
     let code = 0;
     try {
-      ({ output, code } = await run(args, { timeoutMs, onProgress: opts.onProgress }));
+      ({ output, code } = await runWithLogin(args, { timeoutMs, onProgress: opts.onProgress, label }));
     } finally {
       watcher.stop();
     }
@@ -597,6 +695,9 @@ async function downloadItem(id, opts = {}) {
  *
  * Порядок важен: «Failure: No subscription» содержит слово Failure, но
  * повторять его бессмысленно — сначала отсекаем безнадёжные случаи.
+ *
+ * «Rate Limit» в этот список не входит: перед следующей попыткой панель
+ * выдерживает паузу (см. awaitLoginSlot), и вход обычно проходит.
  */
 function isRetryable(message) {
   const text = String(message);
@@ -604,7 +705,6 @@ function isRetryable(message) {
   const hopeless = [
     /No subscription/i,          // аккаунт не владеет игрой
     /Invalid Password|Login Failure/i,
-    /Rate Limit/i,               // Steam временно заблокировал вход
     /Two-factor|Steam Guard/i,
     /File ?Not ?Found|Item is deleted|Missing/i, // мод удалён автором
     /Access ?Denied|Permission/i,
@@ -612,38 +712,169 @@ function isRetryable(message) {
   ];
   if (hopeless.some((re) => re.test(text))) return false;
 
-  return /Timeout|Timed out|Connection|Disconnect|I\/O|Suspended|Failure|не создал папку/i.test(text);
+  return /Timeout|Timed out|Connection|Disconnect|I\/O|Suspended|Failure|Rate Limit|ограничил частоту|не создал папку/i.test(
+    text
+  );
 }
 
-/** Периодически докладываем, сколько уже скачано. */
-function watchSize(id, v, expectedBytes, onProgress, label) {
-  let lastReported = 0;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Следить за тем, что SteamCMD качает прямо сейчас.
+ *
+ * Сколько скачано, честнее всего знает сам SteamCMD — он пишет
+ * BytesDownloaded/BytesToDownload в appworkshop_<appid>.acf. Размер папки
+ * идёт в дело только как запасной вариант.
+ *
+ * Одинаковые строки в лог не повторяются: если цифра не меняется, значит
+ * ничего и не происходит, и об этом лучше сказать один раз словами.
+ */
+function watchCurrent(getItem, v, onProgress) {
+  let lastKey = '';
+  let stalledTicks = 0;
+  let stallReported = false;
 
   const timer = setInterval(() => {
-    const bytes = dirSize(downloadDir(id, v)) || dirSize(itemPath(id, v));
-    if (!bytes || bytes === lastReported) return;
-    lastReported = bytes;
+    const item = getItem();
+    if (!item) return;
 
-    const percent = expectedBytes ? Math.min(99, (bytes / expectedBytes) * 100) : null;
-    const human = expectedBytes
-      ? `${formatBytes(bytes)} из ${formatBytes(expectedBytes)}`
-      : formatBytes(bytes);
+    const state = readDownloadingState(item.id, v);
+    const bytes = (state && state.downloaded) || dirSize(downloadDir(item.id, v)) || dirSize(itemPath(item.id, v));
+    const total = (state && state.total) || item.sizeBytes || 0;
+    if (!bytes) return;
 
-    logger.info(SOURCE, `${label}: скачано ${human}`);
-    if (onProgress) onProgress({ percent, phase: `Загрузка ${human}` });
+    const name = item.label || `${item.name} (${item.id})`;
+    const key = `${item.id}:${bytes}`;
+
+    if (key === lastKey) {
+      stalledTicks++;
+      // Полторы минуты без движения при полностью скачанном моде — это тот
+      // самый случай, когда SteamCMD не доводит установку до конца.
+      if (!stallReported && stalledTicks >= 6 && total > 0 && bytes >= total * 0.99) {
+        stallReported = true;
+        logger.warn(
+          SOURCE,
+          `${name}: мод скачан полностью (${formatBytes(bytes)}), но SteamCMD не завершает установку. ` +
+            'Дождитесь окончания попытки — панель перенесёт мод на место сама.'
+        );
+      }
+      return;
+    }
+
+    lastKey = key;
+    stalledTicks = 0;
+    stallReported = false;
+
+    const human = total ? `${formatBytes(bytes)} из ${formatBytes(total)}` : formatBytes(bytes);
+    logger.info(SOURCE, `${name}: скачано ${human}`);
+    if (onProgress) {
+      onProgress({
+        percent: total ? Math.min(99, (bytes / total) * 100) : null,
+        phase: `Загрузка ${human}`
+      });
+    }
   }, 15_000);
 
   if (timer.unref) timer.unref();
   return { stop: () => clearInterval(timer) };
 }
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Скачать сразу несколько модов в ОДНОЙ сессии SteamCMD.
+ *
+ * Это главное лекарство от «Rate Limit Exceeded»: 21 мод коллекции — это
+ * 21 вход в Steam, если качать их по одному, и всего один вход, если
+ * передать все +workshop_download_item сразу. Внутри сессии SteamCMD и так
+ * идёт по модам по очереди, а сбой на одном не отменяет остальные.
+ *
+ * @param {Array<{id: string, name: string, sizeBytes?: number}>} items
+ * @returns {Promise<{ok: Set<string>, output: string, code: number}>}
+ */
+async function downloadBatch(items, opts = {}) {
+  const cfg = config.load();
+  const v = config.active();
+  const appId = String(v.steam.dayzAppId || '221100');
+
+  const args = [];
+  const installDir = steamInstallDir(v);
+  if (installDir) args.push('+force_install_dir', installDir);
+  args.push(...loginArgs(cfg));
+  for (const item of items) {
+    args.push('+workshop_download_item', appId, String(item.id));
+    if (opts.validate) args.push('validate');
+  }
+  args.push('+quit');
+
+  const perItemMs = (parseInt(cfg.steam.downloadTimeoutMinutes, 10) || 180) * 60 * 1000;
+  const timeoutMs = Math.min(8 * 60 * 60 * 1000, perItemMs * items.length);
+
+  const byId = new Map(items.map((i) => [String(i.id), i]));
+  let current = items[0] || null;
+  let finished = 0;
+
+  logger.info(SOURCE, `Пакетная загрузка: ${items.length} мод(ов) за один вход в Steam`);
+
+  const watcher = watchCurrent(() => current, v, (p) => {
+    if (opts.onProgress) opts.onProgress({ ...p, done: finished, current });
+  });
+
+  let output = '';
+  let code = -1;
+  try {
+    ({ output, code } = await runWithLogin(args, {
+      timeoutMs,
+      label: 'пакетная загрузка',
+      onProgress: (p) => opts.onProgress && opts.onProgress({ ...p, done: finished, current }),
+      onLine: (line) => {
+        const started = line.match(/Downloading item\s+(\d+)/i);
+        if (started && byId.has(started[1])) {
+          current = byId.get(started[1]);
+          logger.info(SOURCE, `[${finished + 1}/${items.length}] ${current.name} (${current.id}): загрузка`);
+        }
+        const done = line.match(/Success\.\s*Downloaded item\s+(\d+)/i);
+        if (done && byId.has(done[1])) {
+          finished++;
+          if (opts.onProgress) {
+            opts.onProgress({ percent: 100, phase: 'Мод скачан', done: finished, current: byId.get(done[1]) });
+          }
+        }
+      }
+    }));
+  } finally {
+    watcher.stop();
+  }
+
+  const ok = new Set();
+  for (const match of output.matchAll(/Success\.\s*Downloaded item\s+(\d+)/gi)) {
+    if (byId.has(match[1])) ok.add(match[1]);
+  }
+
+  const missed = items.length - ok.size;
+  if (missed > 0) {
+    logger.warn(
+      SOURCE,
+      `Пакетная загрузка: готово ${ok.size} из ${items.length}. ` +
+        `Оставшиеся ${missed} мод(ов) панель докачает по одному.`
+    );
+  }
+
+  return { ok, output, code };
+}
+
+/** Разбить список на пачки — командная строка SteamCMD не резиновая. */
+function chunk(list, size) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
 
 /**
  * Скачать/обновить набор модов и определить, что изменилось.
  *
- * Моды качаются по одному: так обрыв на тяжёлом моде не отменяет остальные,
- * а прогресс виден по каждому в отдельности.
+ * Сначала — одна сессия SteamCMD на всю пачку (один вход в Steam), потом всё,
+ * что в пачке не получилось, докачивается по одному с повторами и переносом
+ * из downloads. Так коллекция из двух десятков модов не упирается в лимит
+ * входов, а тяжёлый мод по-прежнему получает свои попытки.
  *
  * @param {Array<string|{id: string, sizeBytes?: number, name?: string}>} items
  * @param {{validate?: boolean, onProgress?: Function, onItemDone?: Function}} [opts]
@@ -663,31 +894,68 @@ async function downloadItems(items, opts = {}) {
 
   if (!list.length) return { results: [], code: 0 };
 
+  cancelRequested = false;
+
   const before = readInstalledState(v);
   const existedBefore = Object.fromEntries(list.map((i) => [i.id, itemExists(i.id, v)]));
   const results = [];
+  const share = 100 / list.length;
+
+  // Фаза 1: пачкой. Для одного мода смысла нет — сразу идём в обычную ветку.
+  const batchOk = new Set();
+  if (list.length > 1) {
+    const batchSize = Math.max(1, parseInt(config.load().steam.batchSize, 10) || 25);
+    let already = 0;
+
+    for (const part of chunk(list, batchSize)) {
+      try {
+        const batch = await downloadBatch(part, {
+          validate: opts.validate,
+          onProgress: (p) => {
+            if (!opts.onProgress) return;
+            const inner = p.percent === null || p.percent === undefined ? 50 : p.percent;
+            const index = already + p.done;
+            opts.onProgress({
+              percent: Math.min(99, (index + inner / 100) * share),
+              phase: p.current
+                ? `[${Math.min(index + 1, list.length)}/${list.length}] ${p.current.name}: ${p.phase}`
+                : p.phase
+            });
+          }
+        });
+        for (const id of batch.ok) batchOk.add(id);
+      } catch (err) {
+        if (cancelRequested) throw err;
+        logger.warn(SOURCE, `Пакетная загрузка не удалась (${err.message}) — качаю моды по одному`);
+      }
+      already += part.length;
+    }
+  }
 
   for (let index = 0; index < list.length; index++) {
     const item = list[index];
     const label = `${item.name} (${item.id})`;
-    logger.info(SOURCE, `[${index + 1}/${list.length}] ${label}: загрузка`);
-
-    const share = 100 / list.length;
     const base = index * share;
 
-    const outcome = await downloadItem(item.id, {
-      validate: opts.validate,
-      expectedBytes: item.sizeBytes,
-      label,
-      onProgress: (p) => {
-        if (!opts.onProgress) return;
-        const inner = p.percent === null || p.percent === undefined ? 50 : p.percent;
-        opts.onProgress({
-          percent: base + (inner / 100) * share,
-          phase: `[${index + 1}/${list.length}] ${item.name}: ${p.phase}`
-        });
-      }
-    });
+    let outcome;
+    if (batchOk.has(item.id) && itemExists(item.id, config.active())) {
+      outcome = { ok: true };
+    } else {
+      logger.info(SOURCE, `[${index + 1}/${list.length}] ${label}: докачиваю отдельно`);
+      outcome = await downloadItem(item.id, {
+        validate: opts.validate,
+        expectedBytes: item.sizeBytes,
+        label,
+        onProgress: (p) => {
+          if (!opts.onProgress) return;
+          const inner = p.percent === null || p.percent === undefined ? 50 : p.percent;
+          opts.onProgress({
+            percent: base + (inner / 100) * share,
+            phase: `[${index + 1}/${list.length}] ${item.name}: ${p.phase}`
+          });
+        }
+      });
+    }
 
     const after = readInstalledState(config.active());
     const prev = before[item.id] || { manifest: '', timeupdated: 0 };
@@ -737,7 +1005,7 @@ function detectError(output) {
     return 'Неверный логин или пароль Steam';
   }
   if (/Rate Limit Exceeded/i.test(output)) {
-    return 'Steam временно ограничил число попыток входа — подождите 10–30 минут';
+    return 'Steam ограничил частоту входов (Rate Limit) — панель подождёт и попробует снова';
   }
   if (/Two-factor code mismatch|Steam Guard/i.test(output)) {
     return 'Требуется код Steam Guard. Выполните вход вручную: steamcmd +login ЛОГИН +quit';
@@ -782,6 +1050,7 @@ module.exports = {
   installServerApp,
   downloadItem,
   downloadItems,
+  downloadBatch,
   downloadDir,
   rescueDownloadedItem,
   readInstalledState,

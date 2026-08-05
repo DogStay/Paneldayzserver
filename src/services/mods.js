@@ -182,6 +182,62 @@ function scanLocalCandidates(v = config.active()) {
     });
 }
 
+/* ------------------------------------------------- запущенный сервер и файлы */
+
+/**
+ * Запущенный DayZServer_x64.exe держит .pbo модов открытыми, и Windows не даёт
+ * ни удалить, ни перезаписать папку мода — копирование падает с EPERM.
+ * Поэтому перед раскладкой сервер должен быть остановлен.
+ *
+ * require здесь ленивый: serverProcess сам подключает этот модуль.
+ */
+function serverIsRunning(v = config.active()) {
+  try {
+    return require('./serverProcess').isRunning(v.id);
+  } catch (_) {
+    return false;
+  }
+}
+
+const SERVER_BUSY_HINT =
+  'Сервер запущен и держит файлы модов открытыми — Windows не даёт заменить папку. ' +
+  'Остановите сервер и повторите, либо включите «Остановить сервер и разложить моды».';
+
+/**
+ * Выполнить раскладку, при необходимости остановив сервер и запустив его снова.
+ * Без явного разрешения панель сервер не трогает: на нём могут играть люди.
+ *
+ * @param {{stopServer?: boolean}} opts
+ * @param {Function} fn
+ */
+async function withServerStopped(opts, fn) {
+  const v = config.active();
+  if (!serverIsRunning(v)) return fn();
+
+  if (!opts.stopServer) {
+    logger.warn(SOURCE, SERVER_BUSY_HINT);
+    return fn(); // скачать моды можно и так, раскладку остановит понятная ошибка
+  }
+
+  const serverProcess = require('./serverProcess');
+  const serverId = v.id;
+
+  logger.warn(SOURCE, 'Останавливаю сервер, чтобы заменить файлы модов…');
+  await serverProcess.stop(serverId).catch((err) => logger.warn(SOURCE, `Остановка: ${err.message}`));
+  // Windows отпускает файловые дескрипторы не мгновенно после смерти процесса.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+
+  try {
+    return await fn();
+  } finally {
+    logger.info(SOURCE, 'Раскладка завершена — запускаю сервер обратно');
+    // Моды уже обновлены и разложены, второй заход в SteamCMD не нужен.
+    await serverProcess
+      .start(serverId, { skipUpdate: true })
+      .catch((err) => logger.error(SOURCE, `Не удалось запустить сервер обратно: ${err.message}`));
+  }
+}
+
 function isInsideServer(target, v = config.active()) {
   if (!target || !v.paths.serverPath) return false;
   const rel = path.relative(path.resolve(v.paths.serverPath), path.resolve(target));
@@ -381,7 +437,7 @@ function adoptExisting(id, opts = {}) {
 /**
  * Скачать выбранные моды (кнопка «Загрузить» в окне подписки) и разложить их.
  * @param {Array<{id: string, name?: string, type?: string, preview?: string, sizeBytes?: number}>} items
- * @param {{onProgress?: (p: {percent: number, step: string}) => void}} [opts]
+ * @param {{onProgress?: (p: {percent: number, step: string}) => void, stopServer?: boolean}} [opts]
  */
 async function downloadMany(items, opts = {}) {
   const list = items
@@ -410,6 +466,14 @@ async function downloadMany(items, opts = {}) {
   notify(88, 'Раскладываю моды в папку сервера');
 
   const now = new Date().toISOString();
+  await withServerStopped(opts, () => deployResults(results, report, now));
+
+  notify(100, `Готово: ${report.downloaded.length} из ${report.total}`);
+  return report;
+}
+
+/** Разложить только что скачанные моды и записать итог в отчёт. */
+async function deployResults(results, report, now) {
   for (const result of results) {
     const v = config.active();
     const mod = v.mods.find((m) => m.id === result.id);
@@ -453,7 +517,6 @@ async function downloadMany(items, opts = {}) {
     }
   }
 
-  notify(100, `Готово: ${report.downloaded.length} из ${report.total}`);
   return report;
 }
 
@@ -528,6 +591,12 @@ async function deploy(mod, opts = {}) {
     return target;
   }
 
+  // Заменять папку мода под работающим сервером бессмысленно и невозможно:
+  // Windows вернёт EPERM. Сообщаем об этом до того, как что-то удалим.
+  if (fs.existsSync(target) && serverIsRunning(v)) {
+    throw new Error(`${folder}: ${SERVER_BUSY_HINT}`);
+  }
+
   const symlink = v.features.deployMode === 'symlink';
 
   if (symlink && isLinkTo(target, source) && !opts.force) {
@@ -585,21 +654,23 @@ function removeIfExists(target) {
 }
 
 /** Разложить все включённые моды (или указанный список). */
-async function deployAll(ids = null) {
+async function deployAll(ids = null, opts = {}) {
   const v = config.active();
   const targets = v.mods.filter((m) => (ids ? ids.includes(m.id) : m.enabled));
-  const report = [];
 
-  for (const mod of targets) {
-    try {
-      await deploy(mod);
-      report.push({ id: mod.id, name: mod.name, ok: true });
-    } catch (err) {
-      logger.error(SOURCE, `${mod.name} (${mod.id}): ${err.message}`);
-      report.push({ id: mod.id, name: mod.name, ok: false, error: err.message });
+  return withServerStopped(opts, async () => {
+    const report = [];
+    for (const mod of targets) {
+      try {
+        await deploy(mod);
+        report.push({ id: mod.id, name: mod.name, ok: true });
+      } catch (err) {
+        logger.error(SOURCE, `${mod.name} (${mod.id}): ${err.message}`);
+        report.push({ id: mod.id, name: mod.name, ok: false, error: err.message });
+      }
     }
-  }
-  return report;
+    return report;
+  });
 }
 
 /* ---------------------------------------------------- автообновление перед стартом */
@@ -622,6 +693,12 @@ async function checkAndUpdate(opts = {}) {
       `Пропускаю проверку обновлений для модов, установленных переносом: ${manual.map((m) => m.name).join(', ')}. ` +
         'SteamCMD скачал бы их целиком заново.'
     );
+  }
+
+  // Моды, которые надо просто разложить: локальные и установленные переносом.
+  // Раскладка идёт одним заходом вместе с обновлёнными — чтобы сервер (если
+  // его понадобится остановить) останавливался ровно один раз.
+  const deployOnly = async () => {
     for (const mod of manual) {
       try {
         await deploy(mod);
@@ -629,18 +706,17 @@ async function checkAndUpdate(opts = {}) {
         logger.error(SOURCE, `${mod.name}: ${err.message}`);
       }
     }
-  }
-
-  // Локальные моды в Steam не проверяются, но разложить их всё равно надо.
-  for (const mod of local) {
-    try {
-      await deploy(mod);
-    } catch (err) {
-      logger.error(SOURCE, `Локальный мод ${mod.name}: ${err.message}`);
+    for (const mod of local) {
+      try {
+        await deploy(mod);
+      } catch (err) {
+        logger.error(SOURCE, `Локальный мод ${mod.name}: ${err.message}`);
+      }
     }
-  }
+  };
 
   if (!enabled.length) {
+    await withServerStopped(opts, deployOnly);
     logger.info(
       SOURCE,
       local.length
@@ -665,6 +741,7 @@ async function checkAndUpdate(opts = {}) {
   const updated = [];
   const failed = [];
   const now = new Date().toISOString();
+  const toDeploy = [];
 
   for (const result of results) {
     const mod = enabled.find((m) => m.id === result.id);
@@ -692,14 +769,20 @@ async function checkAndUpdate(opts = {}) {
     const label = result.status === 'installed' ? 'установлен' : 'ОБНОВЛЁН';
     logger.info(SOURCE, `↑ ${mod.name} (${mod.id}): ${label} (manifest ${result.manifest || 'n/a'})`);
     updated.push({ id: mod.id, name: mod.name, status: result.status, manifest: result.manifest });
-
-    try {
-      await deploy({ ...mod, folder: mod.folder || folderNameFor(mod.id, mod.name) }, { force: true });
-    } catch (err) {
-      logger.error(SOURCE, `Не удалось разложить обновлённый мод ${mod.name}: ${err.message}`);
-      failed.push({ id: mod.id, name: mod.name, error: err.message });
-    }
+    toDeploy.push(mod);
   }
+
+  await withServerStopped(opts, async () => {
+    await deployOnly();
+    for (const mod of toDeploy) {
+      try {
+        await deploy({ ...mod, folder: mod.folder || folderNameFor(mod.id, mod.name) }, { force: true });
+      } catch (err) {
+        logger.error(SOURCE, `Не удалось разложить обновлённый мод ${mod.name}: ${err.message}`);
+        failed.push({ id: mod.id, name: mod.name, error: err.message });
+      }
+    }
+  });
 
   if (updated.length) {
     logger.info(SOURCE, `Итого обновлено модов: ${updated.length} (${updated.map((u) => u.name).join(', ')})`);

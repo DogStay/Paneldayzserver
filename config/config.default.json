@@ -12,7 +12,8 @@
     "dayzAppId": "221100",
     "serverAppId": "223350",
     "downloadRetries": 5,
-    "downloadTimeoutMinutes": 180
+    "downloadTimeoutMinutes": 180,
+    "batchSize": 25
   },
   "paths": {
     "steamcmdExe": "C:\\SteamCMD\\steamcmd.exe",

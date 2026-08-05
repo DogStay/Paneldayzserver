@@ -268,6 +268,7 @@ router.post(
     if (!Array.isArray(items) || !items.length) {
       return res.status(400).json({ error: 'Не выбрано ни одного мода' });
     }
+    const stopServer = Boolean((req.body || {}).stopServer);
     const serverId = serverIdOf(req);
     const server = config.getServer(serverId);
 
@@ -282,6 +283,7 @@ router.post(
       async (j) =>
         config.withServer(serverId, () =>
           mods.downloadMany(items, {
+            stopServer,
             onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
           })
         )
@@ -360,6 +362,7 @@ router.post(
       async (j) =>
         config.withServer(serverId, () =>
           mods.checkAndUpdate({
+            stopServer: Boolean((req.body || {}).stopServer),
             onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
           })
         )
@@ -387,6 +390,7 @@ router.post(
       async (j) =>
         config.withServer(serverId, () =>
           mods.forceUpdate(mod.id, {
+            stopServer: Boolean((req.body || {}).stopServer),
             onProgress: (p) => jobs.update(j.id, { progress: p.percent, step: p.step })
           })
         )
@@ -400,7 +404,10 @@ router.post(
   '/mods/deploy',
   wrap(async (req, res) => {
     const serverId = serverIdOf(req);
-    const report = await config.withServer(serverId, () => mods.deployAll((req.body || {}).ids || null));
+    const body = req.body || {};
+    const report = await config.withServer(serverId, () =>
+      mods.deployAll(body.ids || null, { stopServer: Boolean(body.stopServer) })
+    );
     res.json({ report, ...mods.list() });
   })
 );
