@@ -1,0 +1,47 @@
+{
+  "panel": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "logBufferLines": 2000
+  },
+  "paths": {
+    "serverPath": "C:\\DayZServer",
+    "serverExe": "DayZServer_x64.exe",
+    "steamcmdExe": "C:\\SteamCMD\\steamcmd.exe",
+    "workshopContentDir": "",
+    "profilesFolder": "profiles",
+    "configFile": "serverDZ.cfg",
+    "batFile": "start_dayz_server.bat"
+  },
+  "steam": {
+    "username": "",
+    "password": "",
+    "anonymous": false,
+    "dayzAppId": "221100",
+    "serverAppId": "223350"
+  },
+  "server": {
+    "name": "My DayZ Server",
+    "maxPlayers": 60,
+    "gamePort": 2302,
+    "steamQueryPort": 27016,
+    "extraPorts": [
+      { "protocol": "UDP", "from": 2303, "to": 2305, "comment": "DayZ voice/rcon-соседние порты" },
+      { "protocol": "UDP", "from": 27016, "to": 27016, "comment": "Steam query" },
+      { "protocol": "UDP", "from": 8766, "to": 8766, "comment": "Steam master" },
+      { "protocol": "TCP", "from": 27016, "to": 27016, "comment": "Steam query TCP" }
+    ],
+    "cpuCount": 0,
+    "limitFPS": 0,
+    "extraArgs": ["-dologs", "-adminlog", "-netlog", "-freezecheck"]
+  },
+  "features": {
+    "autoFirewall": true,
+    "autoUpdateMods": true,
+    "deployMode": "copy",
+    "patchServerCfg": true,
+    "regenerateBatOnStart": true,
+    "launchMode": "exe"
+  },
+  "mods": []
+}

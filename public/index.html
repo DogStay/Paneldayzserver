@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DayZ Panel — управление сервером</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧟</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🧟</span>
+    <div>
+      <div class="title">DayZ Panel</div>
+      <div class="subtitle" id="server-name">—</div>
+    </div>
+  </div>
+
+  <div class="status-block">
+    <span class="dot" id="status-dot"></span>
+    <div>
+      <div class="status-text" id="status-text">загрузка…</div>
+      <div class="status-meta" id="status-meta"></div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-start" id="btn-start">▶ Старт сервера</button>
+    <button class="btn btn-stop" id="btn-stop" disabled>■ Стоп сервера</button>
+    <button class="btn" id="btn-restart">⟳ Рестарт</button>
+  </div>
+</header>
+
+<div id="problems" class="banner hidden"></div>
+
+<div class="layout">
+  <main class="content">
+    <nav class="tabs">
+      <button class="tab active" data-tab="mods">Моды</button>
+      <button class="tab" data-tab="settings">Настройки</button>
+      <button class="tab" data-tab="bat">.bat запуска</button>
+      <button class="tab" data-tab="firewall">Брандмауэр</button>
+      <button class="tab" data-tab="cfg">serverDZ.cfg</button>
+    </nav>
+
+    <!-- ------------------------------------------------------------ Моды -->
+    <section class="panel active" id="tab-mods">
+      <div class="card">
+        <h2>Добавить мод по Workshop ID</h2>
+        <div class="row">
+          <input type="text" id="mod-id" placeholder="например 1559212036" inputmode="numeric">
+          <select id="mod-type">
+            <option value="client">Клиентский (-mod)</option>
+            <option value="server">Серверный (-serverMod)</option>
+          </select>
+          <button class="btn btn-primary" id="btn-add-mod">Скачать через SteamCMD</button>
+        </div>
+        <p class="hint">
+          ID берётся из ссылки Workshop: <code>…/sharedfiles/filedetails/?id=<b>1559212036</b></code>.
+          Скачивание требует интернета и корректно настроенного SteamCMD.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Установленные моды</h2>
+          <div class="card-actions">
+            <button class="btn btn-small" id="btn-check-updates">Проверить обновления</button>
+            <button class="btn btn-small" id="btn-deploy">Разложить в папку сервера</button>
+            <button class="btn btn-small" id="btn-refresh-mods">Обновить список</button>
+          </div>
+        </div>
+        <div id="mods-list" class="mods-list"></div>
+        <p class="hint">
+          Порядок модов в списке = порядок в параметре <code>-mod=</code>. Перетаскивайте строки мышью,
+          чтобы его изменить (зависимости вроде <code>@CF</code> держите выше).
+        </p>
+      </div>
+
+      <div class="card hidden" id="orphans-card">
+        <h2>Скачаны, но не подключены</h2>
+        <p class="hint">Эти папки найдены в workshop/content, но их нет в списке панели.</p>
+        <div id="orphans-list" class="mods-list"></div>
+      </div>
+    </section>
+
+    <!-- -------------------------------------------------------- Настройки -->
+    <section class="panel" id="tab-settings">
+      <form id="settings-form">
+        <div class="card">
+          <h2>Пути</h2>
+          <div class="grid">
+            <label>Папка сервера
+              <input name="paths.serverPath" placeholder="C:\DayZServer">
+            </label>
+            <label>Имя exe-файла
+              <input name="paths.serverExe" placeholder="DayZServer_x64.exe">
+            </label>
+            <label>Путь к steamcmd.exe
+              <input name="paths.steamcmdExe" placeholder="C:\SteamCMD\steamcmd.exe">
+            </label>
+            <label>Папка workshop-контента <span class="opt">(пусто = рассчитать от steamcmd)</span>
+              <input name="paths.workshopContentDir" placeholder="C:\SteamCMD\steamapps\workshop\content\221100">
+            </label>
+            <label>Папка профилей
+              <input name="paths.profilesFolder" placeholder="profiles">
+            </label>
+            <label>Файл конфига сервера
+              <input name="paths.configFile" placeholder="serverDZ.cfg">
+            </label>
+            <label>Имя генерируемого .bat
+              <input name="paths.batFile" placeholder="start_dayz_server.bat">
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Сервер</h2>
+          <div class="grid">
+            <label>Название сервера
+              <input name="server.name">
+            </label>
+            <label>Максимум игроков
+              <input name="server.maxPlayers" type="number" min="1" max="200">
+            </label>
+            <label>Игровой порт (UDP)
+              <input name="server.gamePort" type="number" min="1" max="65535">
+            </label>
+            <label>Steam query порт
+              <input name="server.steamQueryPort" type="number" min="1" max="65535">
+            </label>
+            <label>-cpuCount <span class="opt">(0 = не указывать)</span>
+              <input name="server.cpuCount" type="number" min="0" max="64">
+            </label>
+            <label>-limitFPS <span class="opt">(0 = не указывать)</span>
+              <input name="server.limitFPS" type="number" min="0" max="1000">
+            </label>
+          </div>
+          <label class="block">Дополнительные аргументы <span class="opt">(по одному в строке)</span>
+            <textarea name="server.extraArgs" rows="4" spellcheck="false"></textarea>
+          </label>
+          <label class="block">Дополнительные порты для брандмауэра
+            <textarea name="server.extraPorts" rows="5" spellcheck="false"></textarea>
+          </label>
+          <p class="hint">
+            Формат строки портов: <code>UDP 2303-2305 комментарий</code> или <code>TCP 27016 Steam query</code>.
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Steam / SteamCMD</h2>
+          <div class="grid">
+            <label>Логин Steam
+              <input name="steam.username" autocomplete="off">
+            </label>
+            <label>Пароль <span class="opt" id="pass-hint"></span>
+              <input name="steam.password" type="password" autocomplete="new-password" placeholder="оставьте пустым, чтобы не менять">
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" name="steam.anonymous"> Анонимный вход <span class="opt">(для модов DayZ обычно не подходит)</span></label>
+          <p class="hint">
+            При включённом Steam Guard один раз выполните вход вручную:
+            <code>steamcmd +login ЛОГИН +quit</code> — дальше SteamCMD использует сохранённую сессию.
+            Пароль хранится в открытом виде в <code>config/config.json</code>; безопаснее оставить поле пустым.
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Поведение панели</h2>
+          <label class="check"><input type="checkbox" name="features.autoFirewall"> Открывать порты в брандмауэре при старте</label>
+          <label class="check"><input type="checkbox" name="features.autoUpdateMods"> Проверять обновления модов перед стартом</label>
+          <label class="check"><input type="checkbox" name="features.patchServerCfg"> Синхронизировать serverDZ.cfg с настройками</label>
+          <label class="check"><input type="checkbox" name="features.regenerateBatOnStart"> Перегенерировать .bat при старте</label>
+          <div class="grid">
+            <label>Способ раскладки модов
+              <select name="features.deployMode">
+                <option value="copy">Копировать (надёжнее)</option>
+                <option value="symlink">Симлинк / junction (экономит место)</option>
+              </select>
+            </label>
+            <label>Способ запуска
+              <select name="features.launchMode">
+                <option value="exe">Напрямую DayZServer_x64.exe</option>
+                <option value="bat">Через сгенерированный .bat</option>
+              </select>
+            </label>
+            <label>Адрес панели
+              <input name="panel.host" placeholder="127.0.0.1">
+            </label>
+            <label>Порт панели <span class="opt">(нужен перезапуск)</span>
+              <input name="panel.port" type="number" min="1" max="65535">
+            </label>
+          </div>
+        </div>
+
+        <div class="sticky-actions">
+          <button class="btn btn-primary" type="submit">Сохранить настройки</button>
+          <button class="btn" type="button" id="btn-reload-settings">Отменить изменения</button>
+          <span class="hint" id="settings-saved"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- ------------------------------------------------------------- .bat -->
+    <section class="panel" id="tab-bat">
+      <div class="card">
+        <div class="card-head">
+          <h2>Предпросмотр файла запуска</h2>
+          <div class="card-actions">
+            <button class="btn btn-small" id="btn-bat-refresh">Обновить</button>
+            <button class="btn btn-small btn-primary" id="btn-bat-save">Записать .bat на диск</button>
+          </div>
+        </div>
+        <p class="hint">Путь: <code id="bat-path">—</code></p>
+        <p class="hint">Командная строка: <code id="bat-cmd">—</code></p>
+        <pre class="code" id="bat-content">—</pre>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- Брандмауэр -->
+    <section class="panel" id="tab-firewall">
+      <div class="card">
+        <div class="card-head">
+          <h2>Правила Windows Firewall</h2>
+          <div class="card-actions">
+            <button class="btn btn-small" id="btn-fw-refresh">Проверить</button>
+            <button class="btn btn-small btn-primary" id="btn-fw-apply">Открыть порты сейчас</button>
+            <button class="btn btn-small" id="btn-fw-bat">Сохранить .bat для админа</button>
+            <button class="btn btn-small btn-danger" id="btn-fw-remove">Удалить правила панели</button>
+          </div>
+        </div>
+        <div id="fw-list"></div>
+        <p class="hint">
+          Для создания правил панель должна быть запущена от имени администратора.
+          Иначе используйте <code>generated/open-firewall.bat</code>.
+        </p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------ serverDZ.cfg -->
+    <section class="panel" id="tab-cfg">
+      <div class="card">
+        <div class="card-head">
+          <h2>serverDZ.cfg</h2>
+          <div class="card-actions">
+            <button class="btn btn-small" id="btn-cfg-reload">Перечитать</button>
+            <button class="btn btn-small" id="btn-cfg-sync">Подставить значения из панели</button>
+            <button class="btn btn-small btn-primary" id="btn-cfg-save">Сохранить</button>
+          </div>
+        </div>
+        <p class="hint">Путь: <code id="cfg-path">—</code></p>
+        <textarea id="cfg-content" class="code-edit" rows="24" spellcheck="false"></textarea>
+      </div>
+    </section>
+  </main>
+
+  <!-- ---------------------------------------------------------------- Лог -->
+  <aside class="logbox">
+    <div class="log-head">
+      <span>Лог в реальном времени</span>
+      <div class="log-actions">
+        <label class="check tiny"><input type="checkbox" id="log-autoscroll" checked> автопрокрутка</label>
+        <select id="log-filter">
+          <option value="">все источники</option>
+          <option value="server">server</option>
+          <option value="steamcmd">steamcmd</option>
+          <option value="mods">mods</option>
+          <option value="firewall">firewall</option>
+          <option value="bat">bat</option>
+          <option value="panel">panel</option>
+        </select>
+        <button class="btn btn-small" id="btn-log-clear">Очистить</button>
+      </div>
+    </div>
+    <div class="log" id="log"></div>
+    <div class="log-foot"><span id="sse-state">подключение…</span></div>
+  </aside>
+</div>
+
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

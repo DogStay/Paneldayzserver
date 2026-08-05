@@ -1,0 +1,12 @@
+node_modules/
+npm-debug.log*
+
+# Рабочий конфиг панели (создаётся при первом запуске из config.default.json)
+config/config.json
+
+# Локальные логи панели
+logs/
+*.log
+
+# Сгенерированный .bat запуска сервера (генерируется автоматически)
+generated/

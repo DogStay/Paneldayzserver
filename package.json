@@ -1,0 +1,19 @@
+{
+  "name": "dayz-panel",
+  "version": "1.0.0",
+  "description": "Локальная веб-панель управления сервером DayZ Standalone (Windows)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "license": "MIT",
+  "private": true
+}
