@@ -265,70 +265,246 @@ async function installServerApp(targetDir, opts = {}) {
 
 /* ------------------------------------------------------------- моды */
 
-/**
- * Скачать/обновить моды одним запуском SteamCMD и определить, что изменилось.
- * @param {string[]} ids
- * @param {{validate?: boolean, onProgress?: Function, onItemDone?: Function}} [opts]
- */
-async function downloadItems(ids, opts = {}) {
-  const v = config.active();
-  const list = [...new Set(ids.map(String).filter(Boolean))];
-  if (!list.length) return { results: [], code: 0 };
+/** Папка, куда SteamCMD складывает недокачанный контент. */
+function downloadDir(id, v = config.active()) {
+  const root = config.workshopRoot(v);
+  return root ? path.join(root, 'downloads', String(v.steam.dayzAppId || '221100'), String(id)) : '';
+}
 
-  const appId = String(v.steam.dayzAppId || '221100');
-  const before = readInstalledState(v);
-  const existedBefore = Object.fromEntries(list.map((id) => [id, itemExists(id, v)]));
-
-  const args = [];
-  const installDir = steamInstallDir(v);
-  if (installDir) args.push('+force_install_dir', installDir);
-  args.push(...loginArgs(config.load()));
-  for (const id of list) {
-    args.push('+workshop_download_item', appId, id);
-    if (opts.validate) args.push('validate');
-  }
-  args.push('+quit');
-
-  let doneCount = 0;
-  const { code, output } = await run(args, {
-    onProgress: opts.onProgress,
-    onLine: (line) => {
-      const m = line.match(/Success\.\s*Downloaded item\s+(\d+)/i);
-      if (m) {
-        doneCount++;
-        if (opts.onItemDone) opts.onItemDone(m[1], doneCount, list.length);
+/** Размер папки в байтах — нужен, чтобы показывать прогресс тяжёлых модов. */
+function dirSize(dir) {
+  let bytes = 0;
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        try {
+          bytes += fs.statSync(full).size;
+        } catch (_) {
+          /* файл мог исчезнуть между чтением списка и stat */
+        }
       }
     }
-  });
+  };
+  if (dir && fs.existsSync(dir)) walk(dir);
+  return bytes;
+}
 
-  const after = readInstalledState(config.active());
+const formatBytes = (bytes) => {
+  if (!bytes) return '0 Б';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
+};
 
-  const results = list.map((id) => {
-    const prev = before[id] || { manifest: '', timeupdated: 0 };
-    const next = after[id] || { manifest: '', timeupdated: 0 };
+/**
+ * Скачать один мод, при необходимости — за несколько попыток.
+ *
+ * Моды на 8–10 ГБ регулярно обрываются по таймауту SteamCMD
+ * («Timeout downloading item»). Это не фатально: SteamCMD складывает
+ * недокачанное в steamapps/workshop/downloads и при следующем запуске
+ * продолжает с того же места. Поэтому вместо одной попытки делаем несколько
+ * и показываем, что объём на диске растёт.
+ *
+ * @param {string} id
+ * @param {{validate?: boolean, expectedBytes?: number, onProgress?: Function, label?: string}} [opts]
+ */
+async function downloadItem(id, opts = {}) {
+  const cfg = config.load();
+  const v = config.active();
+  const appId = String(v.steam.dayzAppId || '221100');
+  const maxAttempts = Math.max(1, parseInt(cfg.steam.downloadRetries, 10) || 5);
+  const timeoutMs = (parseInt(cfg.steam.downloadTimeoutMinutes, 10) || 180) * 60 * 1000;
+  const label = opts.label || `мод ${id}`;
 
-    if (!itemExists(id, v)) {
-      return {
-        id,
-        status: 'failed',
-        manifest: next.manifest,
-        timeupdated: next.timeupdated,
-        error: detectItemError(output, id) || detectError(output) || 'Папка мода не появилась в workshop/content'
-      };
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      const partial = dirSize(downloadDir(id, v));
+      logger.warn(
+        SOURCE,
+        `${label}: попытка ${attempt} из ${maxAttempts}. ` +
+          (partial
+            ? `На диске уже ${formatBytes(partial)} — SteamCMD продолжит с этого места.`
+            : 'Загрузка начнётся заново.')
+      );
+      await delay(3000);
     }
 
-    const changed =
-      (next.manifest && next.manifest !== prev.manifest) ||
-      (next.timeupdated && next.timeupdated !== prev.timeupdated);
+    const args = [];
+    const installDir = steamInstallDir(v);
+    if (installDir) args.push('+force_install_dir', installDir);
+    args.push(...loginArgs(cfg));
+    args.push('+workshop_download_item', appId, String(id));
+    if (opts.validate) args.push('validate');
+    args.push('+quit');
 
-    let status = 'up-to-date';
-    if (!existedBefore[id]) status = 'installed';
-    else if (changed) status = 'updated';
+    // Пока SteamCMD молчит, следим за размером папки — для больших модов это
+    // единственный честный признак того, что процесс жив и что-то качает.
+    const watcher = watchSize(id, v, opts.expectedBytes, opts.onProgress, label);
 
-    return { id, status, manifest: next.manifest, timeupdated: next.timeupdated };
-  });
+    let output = '';
+    try {
+      ({ output } = await run(args, { timeoutMs, onProgress: opts.onProgress }));
+    } finally {
+      watcher.stop();
+    }
 
-  return { results, code };
+    if (itemExists(id, v)) {
+      if (attempt > 1) logger.info(SOURCE, `${label}: докачан с ${attempt}-й попытки`);
+      return { ok: true, output, attempts: attempt };
+    }
+
+    lastError = detectItemError(output, id) || detectError(output) || 'SteamCMD не создал папку мода';
+
+    if (!isRetryable(lastError)) {
+      logger.error(SOURCE, `${label}: ${lastError} — повтор не поможет`);
+      return { ok: false, error: lastError, output, attempts: attempt };
+    }
+
+    logger.warn(SOURCE, `${label}: ${lastError}`);
+  }
+
+  return {
+    ok: false,
+    attempts: maxAttempts,
+    error:
+      `${lastError}. Попыток сделано: ${maxAttempts}. ` +
+      'Прогресс не теряется — запустите загрузку ещё раз, SteamCMD продолжит с места обрыва. ' +
+      'Если мод очень большой, увеличьте steam.downloadRetries в config/config.json.'
+  };
+}
+
+/**
+ * Стоит ли повторять попытку.
+ *
+ * Порядок важен: «Failure: No subscription» содержит слово Failure, но
+ * повторять его бессмысленно — сначала отсекаем безнадёжные случаи.
+ */
+function isRetryable(message) {
+  const text = String(message);
+
+  const hopeless = [
+    /No subscription/i,          // аккаунт не владеет игрой
+    /Invalid Password|Login Failure/i,
+    /Rate Limit/i,               // Steam временно заблокировал вход
+    /Two-factor|Steam Guard/i,
+    /File ?Not ?Found|Item is deleted|Missing/i, // мод удалён автором
+    /Access ?Denied|Permission/i,
+    /No space|Disk (write )?full/i
+  ];
+  if (hopeless.some((re) => re.test(text))) return false;
+
+  return /Timeout|Timed out|Connection|Disconnect|I\/O|Suspended|Failure|не создал папку/i.test(text);
+}
+
+/** Периодически докладываем, сколько уже скачано. */
+function watchSize(id, v, expectedBytes, onProgress, label) {
+  let lastReported = 0;
+
+  const timer = setInterval(() => {
+    const bytes = dirSize(downloadDir(id, v)) || dirSize(itemPath(id, v));
+    if (!bytes || bytes === lastReported) return;
+    lastReported = bytes;
+
+    const percent = expectedBytes ? Math.min(99, (bytes / expectedBytes) * 100) : null;
+    const human = expectedBytes
+      ? `${formatBytes(bytes)} из ${formatBytes(expectedBytes)}`
+      : formatBytes(bytes);
+
+    logger.info(SOURCE, `${label}: скачано ${human}`);
+    if (onProgress) onProgress({ percent, phase: `Загрузка ${human}` });
+  }, 15_000);
+
+  if (timer.unref) timer.unref();
+  return { stop: () => clearInterval(timer) };
+}
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Скачать/обновить набор модов и определить, что изменилось.
+ *
+ * Моды качаются по одному: так обрыв на тяжёлом моде не отменяет остальные,
+ * а прогресс виден по каждому в отдельности.
+ *
+ * @param {Array<string|{id: string, sizeBytes?: number, name?: string}>} items
+ * @param {{validate?: boolean, onProgress?: Function, onItemDone?: Function}} [opts]
+ */
+async function downloadItems(items, opts = {}) {
+  const v = config.active();
+  const list = [];
+  const seen = new Set();
+
+  for (const raw of items) {
+    const item = typeof raw === 'object' ? raw : { id: raw };
+    const id = String(item.id || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    list.push({ id, sizeBytes: item.sizeBytes || 0, name: item.name || id });
+  }
+
+  if (!list.length) return { results: [], code: 0 };
+
+  const before = readInstalledState(v);
+  const existedBefore = Object.fromEntries(list.map((i) => [i.id, itemExists(i.id, v)]));
+  const results = [];
+
+  for (let index = 0; index < list.length; index++) {
+    const item = list[index];
+    const label = `${item.name} (${item.id})`;
+    logger.info(SOURCE, `[${index + 1}/${list.length}] ${label}: загрузка`);
+
+    const share = 100 / list.length;
+    const base = index * share;
+
+    const outcome = await downloadItem(item.id, {
+      validate: opts.validate,
+      expectedBytes: item.sizeBytes,
+      label,
+      onProgress: (p) => {
+        if (!opts.onProgress) return;
+        const inner = p.percent === null || p.percent === undefined ? 50 : p.percent;
+        opts.onProgress({
+          percent: base + (inner / 100) * share,
+          phase: `[${index + 1}/${list.length}] ${item.name}: ${p.phase}`
+        });
+      }
+    });
+
+    const after = readInstalledState(config.active());
+    const prev = before[item.id] || { manifest: '', timeupdated: 0 };
+    const next = after[item.id] || { manifest: '', timeupdated: 0 };
+
+    if (!outcome.ok) {
+      results.push({ id: item.id, status: 'failed', manifest: next.manifest, timeupdated: next.timeupdated, error: outcome.error });
+    } else {
+      const changed =
+        (next.manifest && next.manifest !== prev.manifest) ||
+        (next.timeupdated && next.timeupdated !== prev.timeupdated);
+
+      let status = 'up-to-date';
+      if (!existedBefore[item.id]) status = 'installed';
+      else if (changed) status = 'updated';
+
+      results.push({ id: item.id, status, manifest: next.manifest, timeupdated: next.timeupdated });
+    }
+
+    if (opts.onItemDone) opts.onItemDone(item.id, index + 1, list.length);
+    if (opts.onProgress) {
+      opts.onProgress({ percent: (index + 1) * share, phase: `Готово ${index + 1} из ${list.length}` });
+    }
+  }
+
+  return { results, code: results.some((r) => r.status === 'failed') ? 1 : 0 };
 }
 
 /* ------------------------------------------------------------ разбор ошибок */
@@ -386,7 +562,9 @@ module.exports = {
   cancel,
   isBusy,
   installServerApp,
+  downloadItem,
   downloadItems,
+  downloadDir,
   readInstalledState,
   itemPath,
   itemExists,

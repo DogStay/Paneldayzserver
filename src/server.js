@@ -17,6 +17,7 @@ const logger = require('./logger');
 const api = require('./routes/api');
 const serverProcess = require('./services/serverProcess');
 const diagnostics = require('./services/diagnostics');
+const scheduler = require('./services/scheduler');
 
 const cfg = config.load();
 logger.setMaxLines(cfg.panel.logBufferLines);
@@ -65,6 +66,7 @@ const httpServer = app.listen(port, host, () => {
       else logger.info('panel', `«${server.name}»: готов к запуску (порт ${server.server.gamePort})`);
     }
   }
+  scheduler.start();
   logger.info('panel', '═'.repeat(60));
 });
 
@@ -82,6 +84,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info('panel', `Получен ${signal}, завершаю работу…`);
+  scheduler.stop();
   await serverProcess.shutdown();
   httpServer.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();

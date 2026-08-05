@@ -397,12 +397,15 @@ async function downloadMany(items, opts = {}) {
   const notify = (percent, step) => opts.onProgress && opts.onProgress({ percent, step });
   notify(2, `Подготовка загрузки (${ids.length} шт.)`);
 
-  const { results } = await steamcmd.downloadItems(ids, {
-    onProgress: (p) => {
-      if (p.percent !== null) notify(5 + p.percent * 0.8, `${p.phase}: ${Math.round(p.percent)}%`);
-    },
-    onItemDone: (id, done, total) => notify(5 + (done / total) * 80, `Скачано ${done} из ${total}`)
-  });
+  const { results } = await steamcmd.downloadItems(
+    list.map((i) => ({ id: String(i.id), name: i.name || String(i.id), sizeBytes: i.sizeBytes || 0 })),
+    {
+      onProgress: (p) => {
+        if (p.percent !== null && p.percent !== undefined) notify(5 + p.percent * 0.8, p.phase);
+      },
+      onItemDone: (id, done, total) => notify(5 + (done / total) * 80, `Готово ${done} из ${total}`)
+    }
+  );
 
   notify(88, 'Раскладываю моды в папку сервера');
 
@@ -605,11 +608,14 @@ async function checkAndUpdate(opts = {}) {
   logger.info(SOURCE, `Проверка обновлений через SteamCMD для ${enabled.length} мод(ов)…`);
   notify(5, `Проверяю ${enabled.length} мод(ов)`);
 
-  const { results } = await steamcmd.downloadItems(enabled.map((m) => m.id), {
-    onProgress: (p) => {
-      if (p.percent !== null) notify(5 + p.percent * 0.8, `${p.phase}: ${Math.round(p.percent)}%`);
+  const { results } = await steamcmd.downloadItems(
+    enabled.map((m) => ({ id: m.id, name: m.name, sizeBytes: m.sizeBytes })),
+    {
+      onProgress: (p) => {
+        if (p.percent !== null && p.percent !== undefined) notify(5 + p.percent * 0.8, p.phase);
+      }
     }
-  });
+  );
 
   const updated = [];
   const failed = [];

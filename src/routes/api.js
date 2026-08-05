@@ -25,6 +25,7 @@ const firewall = require('../services/firewall');
 const serverCfg = require('../services/serverCfg');
 const serverProcess = require('../services/serverProcess');
 const diagnostics = require('../services/diagnostics');
+const scheduler = require('../services/scheduler');
 
 const router = express.Router();
 
@@ -56,7 +57,11 @@ router.get(
       servers: serversOverview(),
       statuses: serverProcess.allStatuses(),
       server: active ? serverProcess.getStatus(active.id) : null,
-      problems: active ? serverProcess.validate(active.id) : [],
+      problems: active
+        ? [...serverProcess.validate(active.id), ...scheduler.warnings(active.id)]
+        : [],
+      restart: active ? scheduler.state(active.id) : null,
+      restarts: scheduler.allStates(),
       steamcmd: steamcmd.health(),
       jobs: jobs.active(),
       panel: {
@@ -89,7 +94,8 @@ function serversOverview() {
       status: status.status,
       uptimeSec: status.uptimeSec,
       lastError: status.lastError,
-      lastCrashReport: status.lastCrashReport
+      lastCrashReport: status.lastCrashReport,
+      restart: scheduler.state(s.id)
     };
   });
 }
@@ -558,14 +564,20 @@ router.get('/stream', (req, res) => {
   send('statuses', serverProcess.allStatuses());
   jobs.active().forEach((job) => send('job', job));
 
+  send('restarts', scheduler.allStates());
+
   const offLog = logger.subscribe((entry) => send('log', entry));
   const onStatus = (status) => send('status', status);
   const onJob = (job) => send('job', job);
   const onServers = () => send('servers', serversOverview());
+  const onPlan = (plan) => send('restart-plan', plan);
+  const onWarning = (warning) => send('restart-warning', warning);
 
   bus.on('status', onStatus);
   bus.on('job', onJob);
   bus.on('servers', onServers);
+  bus.on('restart-plan', onPlan);
+  bus.on('restart-warning', onWarning);
 
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
 
@@ -575,6 +587,8 @@ router.get('/stream', (req, res) => {
     bus.off('status', onStatus);
     bus.off('job', onJob);
     bus.off('servers', onServers);
+    bus.off('restart-plan', onPlan);
+    bus.off('restart-warning', onWarning);
   });
 });
 

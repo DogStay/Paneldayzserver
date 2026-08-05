@@ -27,11 +27,17 @@ function upsert(job) {
   }
 
   const card = cards.get(job.id);
-  if (!card) return;
+
+  // Задача могла упасть раньше, чем браузер увидел её «running» — карточки
+  // тогда нет, но молчать об ошибке нельзя.
+  if (!card) {
+    if (job.status === 'failed') toast(`${job.title}: ${job.error}`, 'err', 14000);
+    return;
+  }
 
   update(card, job);
   if (job.status === 'done') toast(`${job.title}: готово`, 'ok');
-  else if (job.status === 'failed') toast(`${job.title}: ${job.error}`, 'err');
+  else if (job.status === 'failed') toast(`${job.title}: ${job.error}`, 'err', 14000);
 
   // Успешные плашки убираем быстро, проваленные держим дольше — чтобы прочитали.
   setTimeout(() => remove(job.id), job.status === 'done' ? 2600 : 9000);

@@ -137,6 +137,12 @@ async function init() {
   on('servers', renderTopbar);
   on('server-status', renderTopbar);
 
+  // Предупреждения планировщика видны, на каком бы экране пользователь ни был.
+  on('restart-warning', (w) => {
+    if (w.minutes === 0) toast(`«${w.serverName}»: плановый перезапуск начался`, 'info', 8000);
+    else toast(`«${w.serverName}»: перезапуск через ${w.minutes} мин.`, 'warn', 12000);
+  });
+
   // Разворачиваем консоль, когда начинается что-то длительное.
   on('job', (job) => {
     if (job.status === 'running' && (job.type === 'install-server' || job.type === 'download-mods')) openConsole();

@@ -43,6 +43,7 @@ async function load() {
 function render(s, cfg) {
   const sv = s.server;
   const f = s.features;
+  const r = s.restart;
 
   return `
     <div class="card">
@@ -99,6 +100,62 @@ function render(s, cfg) {
             <small>verifySignatures = 2, рекомендуется держать включённым</small></span>
         </label>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title-icon">${icon('restart')}</span>
+        <div><h2>Автоматический перезапуск</h2>
+          <div class="card-sub">Перезапуск по расписанию: чистит память, применяет обновления модов
+            и лечит подтормаживания на долгих сессиях</div></div>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" data-p="restart.enabled" ${r.enabled ? 'checked' : ''}>
+        <span class="track"></span><span class="switch-text">Включить автоперезапуск
+          <small>Отсчёт идёт только пока сервер работает</small></span>
+      </label>
+
+      <div class="form-grid" style="margin-top:16px">
+        <div class="field">
+          <label>Режим</label>
+          <select data-p="restart.mode" id="restart-mode">
+            <option value="interval" ${r.mode === 'interval' ? 'selected' : ''}>Каждые N часов после запуска</option>
+            <option value="schedule" ${r.mode === 'schedule' ? 'selected' : ''}>В заданные часы суток</option>
+          </select>
+        </div>
+        <div class="field" data-restart="interval">
+          <label>Интервал, часов</label>
+          <input type="number" data-p="restart.intervalHours" value="${r.intervalHours}" min="0.25" max="168" step="0.25">
+          <div class="hint">3 — самый частый вариант. Дробные значения допустимы: 0.5 = 30 минут.</div>
+        </div>
+        <div class="field" data-restart="schedule">
+          <label>Часы перезапуска</label>
+          <input type="text" data-special="times" value="${esc((r.times || []).join(', '))}"
+                 placeholder="06:00, 12:00, 18:00, 00:00">
+          <div class="hint">Через запятую, время местное — то же, что на этой машине.</div>
+        </div>
+        <div class="field">
+          <label>Предупреждать за, минут</label>
+          <input type="text" data-special="warn" value="${esc((r.warnMinutes || []).join(', '))}"
+                 placeholder="15, 5, 1">
+          <div class="hint">Панель напишет в лог и покажет уведомление. Оповещения игрокам в игре
+            требуют RCON и пока не поддерживаются.</div>
+        </div>
+      </div>
+
+      <label class="switch" style="margin-top:18px">
+        <input type="checkbox" data-p="server.timePersistent" ${sv.timePersistent ? 'checked' : ''}>
+        <span class="track"></span><span class="switch-text">Продолжать игровое время после перезапуска
+          <small>serverTimePersistent = 1 — сервер сохраняет время суток и продолжает с него,
+            иначе после каждого рестарта время сбросится на системное</small></span>
+      </label>
+
+      ${r.enabled && !sv.timePersistent
+        ? `<div class="notice warn" style="margin-top:14px"><span class="ic">${icon('alert')}</span>
+             <div>Автоперезапуск включён, а сохранение времени — нет. После каждого рестарта
+             время в игре начнётся заново.</div></div>`
+        : ''}
     </div>
 
     <div class="card">
@@ -282,6 +339,16 @@ function render(s, cfg) {
 function bind(server) {
   paneRef.querySelector('#set-reset').addEventListener('click', (e) => busy(e.currentTarget, load));
 
+  // Поля интервала и расписания взаимоисключающие — показываем только нужное.
+  const modeSelect = paneRef.querySelector('#restart-mode');
+  const syncMode = () => {
+    for (const node of paneRef.querySelectorAll('[data-restart]')) {
+      node.classList.toggle('hidden', node.dataset.restart !== modeSelect.value);
+    }
+  };
+  modeSelect.addEventListener('change', syncMode);
+  syncMode();
+
   paneRef.querySelector('#set-save').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
       const serverPatch = {};
@@ -303,7 +370,22 @@ function bind(server) {
       if (serverPatch.server) {
         serverPatch.server.disable3rdPerson = serverPatch.server.disable3rdPerson ? 1 : 0;
         serverPatch.server.disableVoN = serverPatch.server.disableVoN ? 1 : 0;
+        serverPatch.server.timePersistent = serverPatch.server.timePersistent ? 1 : 0;
         serverPatch.server.name = serverPatch.name;
+      }
+
+      // Расписание перезапуска: «06:00, 12:00» и «15, 5, 1» -> массивы
+      serverPatch.restart = serverPatch.restart || {};
+      try {
+        serverPatch.restart.times = parseTimes(paneRef.querySelector('[data-special="times"]').value);
+      } catch (err) {
+        toast(err.message, 'err');
+        throw err;
+      }
+      serverPatch.restart.warnMinutes = parseMinutes(paneRef.querySelector('[data-special="warn"]').value);
+
+      if (serverPatch.restart.enabled && !serverPatch.server.timePersistent) {
+        toast('Автоперезапуск включён без сохранения игрового времени — оно будет сбрасываться', 'warn', 9000);
       }
 
       const portsText = paneRef.querySelector('[data-special="ports"]').value;
@@ -333,8 +415,36 @@ function bind(server) {
 
 function readValue(input) {
   if (input.type === 'checkbox') return input.checked;
-  if (input.type === 'number') return parseInt(input.value, 10) || 0;
+  if (input.type === 'number') {
+    // Дробный шаг (например интервал 0.5 часа) нельзя округлять до целого.
+    const fractional = input.step && input.step.includes('.');
+    const value = fractional ? parseFloat(input.value) : parseInt(input.value, 10);
+    return Number.isFinite(value) ? value : 0;
+  }
   return input.value.trim();
+}
+
+/** «06:00, 12:00, 18:00» -> ['06:00','12:00','18:00'] */
+function parseTimes(text) {
+  const out = [];
+  for (const raw of String(text).split(/[,;\n]/)) {
+    const value = raw.trim();
+    if (!value) continue;
+    const m = value.match(/^(\d{1,2}):(\d{1,2})$/);
+    if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+      throw new Error(`Не разобрано время: «${value}». Формат: 06:00`);
+    }
+    out.push(`${m[1].padStart(2, '0')}:${m[2].padStart(2, '0')}`);
+  }
+  return out;
+}
+
+/** «15, 5, 1» -> [15, 5, 1] */
+function parseMinutes(text) {
+  return String(text)
+    .split(/[,;\s]+/)
+    .map((v) => parseInt(v, 10))
+    .filter((n) => Number.isFinite(n) && n > 0 && n <= 720);
 }
 
 function assign(target, path, value) {

@@ -19,8 +19,9 @@ export const state = {
   problems: [],
   steamcmd: null,
   config: null,
-  mods: { mods: [], orphans: [] },
+  mods: { mods: [], orphans: [], localCandidates: [] },
   jobs: new Map(),
+  restarts: {},
   lastLogId: 0
 };
 
@@ -53,6 +54,7 @@ export async function refreshStatus() {
   state.statuses = data.statuses;
   state.problems = data.problems;
   state.steamcmd = data.steamcmd;
+  state.restarts = data.restarts || {};
 
   for (const job of data.jobs || []) state.jobs.set(job.id, job);
 
@@ -89,6 +91,8 @@ export const activeStatus = () =>
   state.statuses[state.activeServerId] || { status: 'stopped', uptimeSec: 0, pid: null };
 
 export const statusOf = (id) => state.statuses[id] || { status: 'stopped', uptimeSec: 0 };
+
+export const restartOf = (id) => state.restarts[id] || { enabled: false, nextAt: null, secondsLeft: null };
 
 /* ---------------------------------------------------------------- SSE */
 
@@ -140,6 +144,21 @@ export function connectStream() {
     const job = JSON.parse(e.data);
     state.jobs.set(job.id, job);
     emit('job', job);
+  });
+
+  source.addEventListener('restarts', (e) => {
+    state.restarts = JSON.parse(e.data);
+    emit('restarts', state.restarts);
+  });
+
+  source.addEventListener('restart-plan', (e) => {
+    const plan = JSON.parse(e.data);
+    state.restarts[plan.serverId] = plan;
+    emit('restarts', state.restarts);
+  });
+
+  source.addEventListener('restart-warning', (e) => {
+    emit('restart-warning', JSON.parse(e.data));
   });
 
   source.addEventListener('servers', (e) => {

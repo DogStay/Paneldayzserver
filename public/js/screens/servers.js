@@ -7,7 +7,7 @@
  */
 
 import { api } from '../api.js';
-import { state, on, refreshServers, refreshStatus, navigate, awaitJob, statusOf } from '../store.js';
+import { state, on, refreshServers, refreshStatus, navigate, awaitJob, statusOf, restartOf } from '../store.js';
 import {
   $, el, esc, icon, modal, toast, busy, confirmDialog,
   fmtUptime, trackPointer, STATUS_LABEL
@@ -31,6 +31,7 @@ export function initServersScreen() {
 
   on('servers', render);
   on('server-status', render);
+  on('restarts', render);
   render();
 }
 
@@ -62,8 +63,10 @@ function render() {
           await api.stopServer();
           toast('Сервер остановлен', 'ok');
         } else {
-          await api.startServer();
+          const { job } = await api.startServer();
           toast('Запуск начался — следите за прогрессом', 'info');
+          await awaitJob(job.id).catch((err) => toast(`Запуск не удался: ${err.message}`, 'err', 14000));
+          await refreshServers();
         }
       })
     );
@@ -71,9 +74,12 @@ function render() {
     card.querySelector('[data-act="install"]')?.addEventListener('click', (e) =>
       busy(e.currentTarget, async () => {
         const { job } = await api.installServer(server.id);
-        toast('Установка файлов сервера начата', 'info');
-        await awaitJob(job.id).catch((err) => toast(err.message, 'err'));
+        toast('Установка файлов сервера начата — прогресс виден в консоли', 'info');
+        await awaitJob(job.id)
+          .then(() => toast(`Сервер «${server.name}» установлен`, 'ok'))
+          .catch((err) => toast(`Установка не удалась: ${err.message}`, 'err', 14000));
         await refreshServers();
+        await refreshStatus();
       })
     );
 
@@ -110,8 +116,14 @@ function serverCardHtml(server, status) {
   const cls = [server.status === 'running' ? 'running' : '', status.status === 'preparing' ? 'preparing' : '',
     server.installed ? '' : 'not-installed'].filter(Boolean).join(' ');
 
+  const restart = restartOf(server.id);
+
   const badges = [];
   if (!server.installed) badges.push('<span class="badge warn">не установлен</span>');
+  if (restart.enabled) {
+    const left = restart.nextAt ? fmtUptime(Math.max(0, Math.round((restart.nextAt - Date.now()) / 1000))) : null;
+    badges.push(`<span class="badge info">${icon('restart')} ${left ? `рестарт через ${left}` : 'автоперезапуск'}</span>`);
+  }
   if (server.hasPassword) badges.push(`<span class="badge">${icon('key')} пароль</span>`);
   if (server.lastCrashReport) badges.push('<span class="badge err">был сбой</span>');
 
@@ -194,6 +206,7 @@ export async function openWizard() {
 
   let step = 0;
   let installing = false;
+  let createdServer = null; // чтобы «Повторить установку» не плодила серверы
 
   const m = modal({
     title: 'Создание сервера DayZ',
@@ -278,42 +291,61 @@ export async function openWizard() {
       if (data.steamPass) patch.steam.password = data.steamPass;
       await api.saveConfig(patch);
 
-      const created = await api.createServer({
-        name: data.name,
-        password: data.password,
-        adminPassword: data.adminPassword,
-        maxPlayers: data.maxPlayers,
-        gamePort: data.gamePort,
-        steamQueryPort: data.steamQueryPort,
-        mission: data.mission,
-        timeAcceleration: data.timeAcceleration,
-        disable3rdPerson: data.disable3rdPerson,
-        serverPath: data.serverPath
-      });
+      let server = createdServer;
+      let job;
+
+      if (server) {
+        // Повторная попытка: сервер уже есть, запускаем только установку.
+        job = (await api.installServer(server.id)).job;
+      } else {
+        const created = await api.createServer({
+          name: data.name,
+          password: data.password,
+          adminPassword: data.adminPassword,
+          maxPlayers: data.maxPlayers,
+          gamePort: data.gamePort,
+          steamQueryPort: data.steamQueryPort,
+          mission: data.mission,
+          timeAcceleration: data.timeAcceleration,
+          disable3rdPerson: data.disable3rdPerson,
+          serverPath: data.serverPath
+        });
+        server = created.server;
+        job = created.job;
+        createdServer = server;
+      }
 
       btn.classList.remove('loading');
-      showInstallPane(created.server);
+      showInstallPane(server);
       await refreshServers();
 
-      const job = await awaitJob(created.job.id);
-      finishInstall(created.server, job);
+      const finished = await awaitJob(job.id);
+      finishInstall(server, finished);
     } catch (err) {
       installing = false;
       btn.classList.remove('loading');
-      $('#wz-back').disabled = false;
 
-      const pane = paneBox().querySelector('.install-live');
-      if (pane) {
-        pane.innerHTML = `
-          <div class="notice err"><span class="ic">${icon('alert')}</span>
-            <div><b>Установка не удалась</b><br>${esc(err.message)}<br><br>
-            Что проверить: путь к steamcmd.exe, логин и пароль Steam, наличие DayZ на аккаунте,
-            свободное место на диске. Полный вывод SteamCMD — в консоли внизу окна.</div></div>`;
-        $('#wz-next').innerHTML = `${icon('refresh')} Повторить установку`;
-        $('#wz-next').classList.remove('loading');
-      } else {
-        toast(err.message, 'err');
-      }
+      // showInstallPane прячет кнопки — обязательно возвращаем их,
+      // иначе после сбоя окно превращается в тупик без единой кнопки.
+      const next = $('#wz-next');
+      const back = $('#wz-back');
+      back.disabled = false;
+      back.classList.remove('hidden');
+      next.classList.remove('hidden', 'loading');
+      next.innerHTML = `${icon('refresh')} Повторить установку`;
+      next.className = 'btn btn-primary';
+
+      const pane = paneBox().querySelector('.install-live') || paneBox();
+      pane.innerHTML = `
+        <div class="notice err"><span class="ic">${icon('alert')}</span>
+          <div><b>Установка не удалась</b><br>${esc(err.message)}<br><br>
+          Что проверить: путь к steamcmd.exe, логин и пароль Steam, наличие DayZ на аккаунте,
+          свободное место на диске. Полный вывод SteamCMD — в консоли внизу окна.<br><br>
+          Сервер уже создан, поэтому «Повторить установку» продолжит с того же места —
+          SteamCMD докачает недостающее, а не начнёт заново.</div></div>`;
+
+      toast(err.message, 'err');
+      createdServer = createdServer || null;
     }
   }
 

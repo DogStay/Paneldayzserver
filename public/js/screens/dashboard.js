@@ -7,7 +7,10 @@
  */
 
 import { api } from '../api.js';
-import { state, on, activeServer, activeStatus, refreshStatus, refreshServers, navigate } from '../store.js';
+import {
+  state, on, activeServer, activeStatus, restartOf,
+  refreshStatus, refreshServers, navigate, awaitJob
+} from '../store.js';
 import {
   $, $$, esc, icon, toast, busy,
   fmtUptime, fmtDate, animateNumber, STATUS_LABEL
@@ -64,18 +67,26 @@ export function initDashboardScreen() {
     if (currentTab === 'overview') renderOverview();
   });
   on('mods', updateModsCount);
+  on('restarts', () => {
+    if (currentTab === 'overview') renderOverview();
+  });
   on('status', () => {
     renderHead();
     if (currentTab === 'overview') renderOverview();
   });
 
-  // Аптайм тикает раз в секунду, не дёргая сервер.
+  // Аптайм и обратный отсчёт до перезапуска тикают раз в секунду, не дёргая сервер.
   setInterval(() => {
-    const node = document.getElementById('stat-uptime');
     const status = activeStatus();
-    if (node && status.status === 'running' && status.startedAt) {
-      node.textContent = fmtUptime(Math.floor((Date.now() - status.startedAt) / 1000));
+    const server = activeServer();
+
+    const uptime = document.getElementById('stat-uptime');
+    if (uptime && status.status === 'running' && status.startedAt) {
+      uptime.textContent = fmtUptime(Math.floor((Date.now() - status.startedAt) / 1000));
     }
+
+    const countdown = document.getElementById('stat-restart');
+    if (countdown && server) countdown.textContent = restartLabel(restartOf(server.id), status);
   }, 1000);
 }
 
@@ -137,8 +148,9 @@ function renderHead() {
 
   $('#dash-start').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
-      await api.startServer();
+      const { job } = await api.startServer();
       toast('Запуск начался: порты, моды, .bat, затем сам сервер', 'info');
+      await awaitJob(job.id).catch((err) => toast(`Запуск не удался: ${err.message}`, 'err', 14000));
     })
   );
 
@@ -151,8 +163,9 @@ function renderHead() {
 
   $('#dash-restart').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
-      await api.restartServer();
+      const { job } = await api.restartServer();
       toast('Перезапуск начался', 'info');
+      await awaitJob(job.id).catch((err) => toast(`Перезапуск не удался: ${err.message}`, 'err', 14000));
     })
   );
 }
@@ -165,6 +178,7 @@ function renderOverview() {
   if (!pane || !server) return;
 
   const status = activeStatus();
+  const restart = restartOf(server.id);
   const problems = state.problems || [];
   const summary = status.lastStartSummary;
 
@@ -210,6 +224,11 @@ function renderOverview() {
         <div class="k">${icon('users')} слотов</div>
         <div class="v" id="stat-slots">0</div>
         <div class="s">${server.hasPassword ? 'вход по паролю' : 'открытый сервер'}</div>
+      </div>
+      <div class="stat ${restart.enabled ? 'warn' : ''}">
+        <div class="k">${icon('restart')} автоперезапуск</div>
+        <div class="v" id="stat-restart" style="font-size:19px">${restartLabel(restart, status)}</div>
+        <div class="s">${restartHint(restart)}</div>
       </div>
     </div>
 
@@ -318,8 +337,13 @@ function bindOverviewActions(server) {
   });
 
   bind('ov-install', async () => {
-    await api.installServer(server.id);
-    toast('Установка файлов сервера начата', 'info');
+    const { job } = await api.installServer(server.id);
+    toast('Установка файлов сервера начата — прогресс виден в консоли', 'info');
+    await awaitJob(job.id)
+      .then(() => toast('Файлы сервера установлены', 'ok'))
+      .catch((err) => toast(`Установка не удалась: ${err.message}`, 'err', 14000));
+    await refreshStatus();
+    await refreshServers();
   });
 
   const diagBtn = document.getElementById('ov-open-diag');
@@ -327,3 +351,19 @@ function bindOverviewActions(server) {
 }
 
 const shortPath = (value) => String(value || '').split(/[\\/]/).pop();
+
+/** Текст плитки автоперезапуска. */
+function restartLabel(restart, status) {
+  if (!restart.enabled) return 'выключен';
+  if (status.status !== 'running') return 'ждёт запуска';
+  if (!restart.nextAt) return 'рассчитывается';
+  return fmtUptime(Math.max(0, Math.round((restart.nextAt - Date.now()) / 1000)));
+}
+
+function restartHint(restart) {
+  if (!restart.enabled) return 'включается в настройках сервера';
+  if (restart.mode === 'schedule') {
+    return restart.times && restart.times.length ? `по часам: ${restart.times.join(', ')}` : 'часы не заданы';
+  }
+  return `каждые ${restart.intervalHours} ч`;
+}

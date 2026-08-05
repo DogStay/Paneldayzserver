@@ -41,7 +41,7 @@ disableCrosshair = 0;
 serverTime = "SystemTime";
 serverTimeAcceleration = ${v.server.timeAcceleration};
 serverNightTimeAcceleration = ${v.server.nightTimeAcceleration};
-serverTimePersistent = 0;
+serverTimePersistent = ${v.server.timePersistent};  // 1 — время продолжается после перезапуска
 
 guaranteedUpdates = 1;
 loginQueueConcurrentPlayers = 5;
@@ -126,6 +126,7 @@ function sync(serverId) {
   content = setValue(content, 'disableVoN', v.server.disableVoN, false);
   content = setValue(content, 'serverTimeAcceleration', v.server.timeAcceleration, false);
   content = setValue(content, 'serverNightTimeAcceleration', v.server.nightTimeAcceleration, false);
+  content = setValue(content, 'serverTimePersistent', v.server.timePersistent, false);
   content = setMission(content, v.server.mission);
 
   const changed = content !== original;
@@ -145,7 +146,8 @@ function sync(serverId) {
       hostname: v.server.name,
       maxPlayers: v.server.maxPlayers,
       steamQueryPort: v.server.steamQueryPort,
-      mission: v.server.mission
+      mission: v.server.mission,
+      timePersistent: v.server.timePersistent
     }
   };
 }

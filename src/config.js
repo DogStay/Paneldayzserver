@@ -168,11 +168,22 @@ function normalize(cfg) {
   c.panel.port = toInt(c.panel.port, 8787);
   c.panel.logBufferLines = toInt(c.panel.logBufferLines, 2000);
 
+  // Тяжёлые моды рвутся по таймауту SteamCMD — эти два значения решают,
+  // сколько раз панель попробует докачать и как долго ждать одну попытку.
+  c.steam.downloadRetries = clamp(toInt(c.steam.downloadRetries, 5), 1, 30);
+  c.steam.downloadTimeoutMinutes = clamp(toInt(c.steam.downloadTimeoutMinutes, 180), 5, 1440);
+
   c.servers = (Array.isArray(c.servers) ? c.servers : []).map((raw) => {
     const s = merge(defaults.serverTemplate, raw);
     s.id = s.id || newId();
     s.name = String(s.name || 'DayZ Server').trim() || 'DayZ Server';
     s.installed = Boolean(s.installed);
+
+    s.paths.serverPath = cleanPath(s.paths.serverPath);
+    s.paths.serverExe = String(s.paths.serverExe || 'DayZServer_x64.exe').trim();
+    s.paths.profilesFolder = cleanPath(s.paths.profilesFolder) || 'profiles';
+    s.paths.configFile = String(s.paths.configFile || 'serverDZ.cfg').trim();
+    s.paths.batFile = String(s.paths.batFile || 'start_dayz_server.bat').trim();
 
     s.server.maxPlayers = clamp(toInt(s.server.maxPlayers, 60), 1, 200);
     s.server.gamePort = clamp(toInt(s.server.gamePort, 2302), 1, 65535);
@@ -181,7 +192,25 @@ function normalize(cfg) {
     s.server.limitFPS = clamp(toInt(s.server.limitFPS, 0), 0, 1000);
     s.server.timeAcceleration = clamp(toNum(s.server.timeAcceleration, 12), 0.1, 64);
     s.server.nightTimeAcceleration = clamp(toNum(s.server.nightTimeAcceleration, 1), 0.1, 64);
+    s.server.timePersistent = s.server.timePersistent ? 1 : 0;
     s.server.name = String(s.server.name || s.name);
+
+    // Расписание автоперезапуска
+    s.restart.enabled = Boolean(s.restart.enabled);
+    s.restart.mode = s.restart.mode === 'schedule' ? 'schedule' : 'interval';
+    s.restart.intervalHours = clamp(toNum(s.restart.intervalHours, 3), 0.25, 168);
+
+    s.restart.times = [...new Set(
+      (Array.isArray(s.restart.times) ? s.restart.times : [])
+        .map((value) => normalizeTime(value))
+        .filter(Boolean)
+    )].sort();
+
+    s.restart.warnMinutes = [...new Set(
+      (Array.isArray(s.restart.warnMinutes) ? s.restart.warnMinutes : [])
+        .map((n) => toInt(n, 0))
+        .filter((n) => n > 0 && n <= 720)
+    )].sort((a, b) => b - a);
 
     s.server.extraPorts = (Array.isArray(s.server.extraPorts) ? s.server.extraPorts : [])
       .map((p) => ({
@@ -224,6 +253,8 @@ function normalize(cfg) {
     return s;
   });
 
+  c.paths.steamcmdExe = cleanPath(c.paths.steamcmdExe);
+  c.paths.workshopContentDir = cleanPath(c.paths.workshopContentDir);
   if (!c.paths.workshopContentDir) c.paths.workshopContentDir = deriveWorkshopDir(c);
 
   if (!c.servers.some((s) => s.id === c.activeServerId)) {
@@ -344,6 +375,7 @@ function view(serverId) {
     steam: cfg.steam,
     paths: { ...cfg.paths, ...instance.paths },
     server: instance.server,
+    restart: instance.restart,
     features: instance.features,
     mods: instance.mods
   };
@@ -424,6 +456,42 @@ function toInt(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * Приводим введённый путь в порядок.
+ *
+ * Пользователи копируют пути из проводника вместе с кавычками и завершающим
+ * слешем. Завершающий обратный слеш особенно коварен: Node при запуске
+ * процесса на Windows экранирует аргумент как "C:\Путь\", и слеш экранирует
+ * закрывающую кавычку — SteamCMD получает искажённый аргумент и «молча»
+ * делает не то. Поэтому чистим на входе.
+ */
+function cleanPath(value) {
+  let text = String(value ?? '').trim();
+  if (!text) return '';
+
+  // Кавычки вокруг пути (частый результат «Копировать как путь» в Windows)
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    text = text.slice(1, -1).trim();
+  }
+
+  // Завершающие разделители, но не у корня диска (C:\) и не у корня POSIX (/)
+  while (text.length > 1 && /[\\/]$/.test(text) && !/^[A-Za-z]:[\\/]$/.test(text)) {
+    text = text.slice(0, -1);
+  }
+
+  return text;
+}
+
+/** «7:5» -> «07:05»; мусор отбрасываем. */
+function normalizeTime(value) {
+  const m = String(value || '').trim().match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
 function toNum(value, fallback) {
   const n = parseFloat(value);
   return Number.isFinite(n) ? n : fallback;
@@ -459,6 +527,7 @@ module.exports = {
   serverCfgPath,
   batPath,
   deriveWorkshopDir,
+  cleanPath,
   GLOBAL_PATH_KEYS,
   CONFIG_FILE,
   DEFAULT_FILE
