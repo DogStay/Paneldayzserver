@@ -28,12 +28,22 @@ export function initModsTab(pane) {
         <span class="spacer"></span>
         <div class="row wrap">
           <button class="btn btn-success" id="mods-subscribe">${icon('search')} Подписаться на модификации</button>
+          <button class="btn" id="mods-local">${icon('folder')} Локальный мод</button>
           <button class="btn btn-sm" id="mods-update">${icon('refresh')} Проверить обновления</button>
           <button class="btn btn-sm" id="mods-deploy">${icon('package')} Разложить</button>
           <button class="btn btn-sm btn-ghost btn-icon" id="mods-refresh" title="Обновить список">${icon('restart')}</button>
         </div>
       </div>
       <div class="mod-list" id="mod-list"></div>
+    </div>
+    <div class="card hidden" id="local-card">
+      <div class="card-head">
+        <span class="card-title-icon">${icon('folder')}</span>
+        <div><h2>Папки модов в каталоге сервера</h2>
+          <div class="card-sub">Панель нашла папки <span class="inline-code">@…</span>, которых нет в списке.
+            Подключите их, чтобы они попали в параметры запуска</div></div>
+      </div>
+      <div class="mod-list" id="local-list"></div>
     </div>
     <div class="card hidden" id="orphans-card">
       <div class="card-head">
@@ -45,6 +55,7 @@ export function initModsTab(pane) {
     </div>`;
 
   pane.querySelector('#mods-subscribe').addEventListener('click', () => openSearchModal());
+  pane.querySelector('#mods-local').addEventListener('click', () => openLocalModal());
   pane.querySelector('#mods-refresh').addEventListener('click', (e) => busy(e.currentTarget, refreshMods));
 
   pane.querySelector('#mods-update').addEventListener('click', (e) =>
@@ -103,6 +114,8 @@ function render(data = state.mods) {
     enableDrag(list);
   }
 
+  renderLocalCandidates(data.localCandidates || []);
+
   const orphanCard = paneRef.querySelector('#orphans-card');
   const orphanList = paneRef.querySelector('#orphan-list');
   orphanList.innerHTML = '';
@@ -135,18 +148,71 @@ function render(data = state.mods) {
   }
 }
 
+/** Найденные в каталоге сервера папки @Мод, ещё не подключённые в панели. */
+function renderLocalCandidates(candidates) {
+  const card = paneRef.querySelector('#local-card');
+  const list = paneRef.querySelector('#local-list');
+  list.innerHTML = '';
+
+  if (!candidates.length) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+
+  for (const item of candidates) {
+    const badges = [];
+    if (item.workshopId) badges.push(`<span class="badge info">Workshop ${item.workshopId}</span>`);
+    else badges.push('<span class="badge violet">локальный</span>');
+    if (item.hasKeys) badges.push('<span class="badge">keys</span>');
+    if (!item.hasAddons) badges.push('<span class="badge warn">нет папки addons</span>');
+
+    const row = el(`
+      <div class="mod-row">
+        <div class="mod-thumb ph">${icon('folder')}</div>
+        <div class="mod-main">
+          <div class="mod-name">${esc(item.name)} ${badges.join(' ')}</div>
+          <div class="mod-meta">
+            <span>${icon('folder')} ${esc(item.folder)}</span>
+            <span>${icon('db')} ${item.sizeMb} МБ</span>
+          </div>
+        </div>
+        <div class="mod-actions">
+          <button class="btn btn-sm" data-act="client">${icon('plus')} Как клиентский</button>
+          <button class="btn btn-sm btn-primary" data-act="server">${icon('plus')} Как серверный</button>
+        </div>
+      </div>`);
+
+    for (const type of ['client', 'server']) {
+      row.querySelector(`[data-act="${type}"]`).addEventListener('click', (e) =>
+        busy(e.currentTarget, async () => {
+          await api.addLocalMod({ path: item.path, name: item.name, type });
+          toast(`Мод «${item.name}» подключён как ${type === 'server' ? 'серверный' : 'клиентский'}`, 'ok');
+          await refreshMods();
+          await refreshServers();
+        })
+      );
+    }
+
+    list.appendChild(row);
+  }
+}
+
 function modRow(mod) {
+  const isLocal = mod.source === 'local';
+
   const badges = [];
   if (mod.type === 'server') badges.push('<span class="badge violet">serverMod</span>');
-  if (!mod.downloaded) badges.push('<span class="badge err">не скачан</span>');
+  if (isLocal) badges.push(`<span class="badge info">${icon('folder')} локальный</span>`);
+  if (!mod.downloaded) badges.push(`<span class="badge err">${isLocal ? 'папка не найдена' : 'не скачан'}</span>`);
   else if (!mod.deployed) badges.push('<span class="badge warn">не разложен</span>');
   else badges.push(`<span class="badge ok">${icon('check')} готов</span>`);
   if (mod.updateAvailable) badges.push('<span class="badge warn">есть обновление</span>');
   if (mod.hasKeys) badges.push('<span class="badge">keys</span>');
 
-  const thumb = mod.preview
+  const thumb = mod.preview && !isLocal
     ? `<img class="mod-thumb" src="${esc(mod.preview)}" alt="" loading="lazy">`
-    : `<div class="mod-thumb ph">${icon('package')}</div>`;
+    : `<div class="mod-thumb ph">${icon(isLocal ? 'folder' : 'package')}</div>`;
 
   const row = el(`
     <div class="mod-row ${mod.enabled ? '' : 'off'}" draggable="true" data-id="${mod.id}">
@@ -156,16 +222,23 @@ function modRow(mod) {
       <div class="mod-main">
         <div class="mod-name">${esc(mod.name)} ${badges.join(' ')}</div>
         <div class="mod-meta">
-          <span>${icon('hash')} ${mod.id}</span>
-          <span>${icon('folder')} ${esc(mod.folder)}</span>
-          <span>${icon('db')} ${mod.sizeMb ? `${mod.sizeMb} МБ` : '—'}</span>
-          <span>${icon('clock')} версия ${fmtUnix(mod.installedTimeupdated)}</span>
-          <span>${icon('refresh')} проверен ${fmtDate(mod.lastUpdateCheck)}</span>
+          ${isLocal
+            ? `<span>${icon('folder')} ${esc(mod.folder)}</span>
+               <span>${icon('db')} ${mod.sizeMb ? `${mod.sizeMb} МБ` : '—'}</span>
+               <span title="${esc(mod.localPath)}">${icon('link')} ${esc(shorten(mod.localPath))}</span>
+               <span>${mod.inPlace ? 'лежит в папке сервера' : 'копируется в папку сервера'}</span>`
+            : `<span>${icon('hash')} ${mod.id}</span>
+               <span>${icon('folder')} ${esc(mod.folder)}</span>
+               <span>${icon('db')} ${mod.sizeMb ? `${mod.sizeMb} МБ` : '—'}</span>
+               <span>${icon('clock')} версия ${fmtUnix(mod.installedTimeupdated)}</span>
+               <span>${icon('refresh')} проверен ${fmtDate(mod.lastUpdateCheck)}</span>`}
         </div>
       </div>
       <div class="mod-actions">
-        <a class="btn btn-sm btn-ghost btn-icon" href="https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.id}"
-           target="_blank" rel="noreferrer" title="Открыть в Workshop">${icon('external')}</a>
+        ${isLocal
+          ? ''
+          : `<a class="btn btn-sm btn-ghost btn-icon" href="https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.id}"
+               target="_blank" rel="noreferrer" title="Открыть в Workshop">${icon('external')}</a>`}
         <button class="btn btn-sm" data-act="type" title="Переключить между -mod и -serverMod">
           ${mod.type === 'server' ? '→ клиентский' : '→ серверный'}</button>
         <button class="btn btn-sm btn-ghost btn-icon" data-act="remove" title="Удалить мод">${icon('trash')}</button>
@@ -190,9 +263,14 @@ function modRow(mod) {
   row.querySelector('[data-act="remove"]').addEventListener('click', async () => {
     const yes = await confirmDialog({
       title: 'Удалить модификацию?',
-      message: `<b>${esc(mod.name)}</b> будет убран из списка сервера, а папка
-        <span class="inline-code">${esc(mod.folder)}</span> удалена из каталога сервера.<br><br>
-        Скачанные файлы в workshop-папке SteamCMD останутся — мод можно будет подключить снова без повторной загрузки.`,
+      message: isLocal
+        ? `<b>${esc(mod.name)}</b> будет убран из списка сервера.<br><br>
+           ${mod.inPlace
+             ? 'Ваша папка <span class="inline-code">' + esc(mod.folder) + '</span> останется на диске нетронутой — панель просто забудет о моде.'
+             : 'Копия в каталоге сервера будет удалена, исходная папка <span class="inline-code">' + esc(mod.localPath) + '</span> останется на месте.'}`
+        : `<b>${esc(mod.name)}</b> будет убран из списка сервера, а папка
+           <span class="inline-code">${esc(mod.folder)}</span> удалена из каталога сервера.<br><br>
+           Скачанные файлы в workshop-папке SteamCMD останутся — мод можно будет подключить снова без повторной загрузки.`,
       confirmText: 'Удалить',
       danger: true
     });
@@ -205,6 +283,80 @@ function modRow(mod) {
   });
 
   return row;
+}
+
+/** Длинный путь в строке мода показываем сокращённо, полный — в подсказке. */
+function shorten(value, max = 46) {
+  const text = String(value || '');
+  return text.length <= max ? text : `…${text.slice(-(max - 1))}`;
+}
+
+/* ------------------------------------------------- локальный мод из папки */
+
+export function openLocalModal() {
+  const m = modal({
+    title: 'Добавить локальный мод',
+    subtitle: 'Своя папка с модом — например, серверный мод, которого нет в Workshop',
+    icon: 'folder',
+    body: `
+      <div class="form-grid one">
+        <div class="field">
+          <label>${icon('folder')} Путь к папке мода</label>
+          <input type="text" id="lm-path" placeholder="C:\\DayZServers\\MyServer\\@MyServerMod" autocomplete="off">
+          <div class="hint">Можно указать полный путь или просто имя папки внутри каталога сервера
+            (например <span class="inline-code">@MyServerMod</span>). Внутри должны лежать
+            <span class="inline-code">addons\\*.pbo</span>, при наличии подписи —
+            <span class="inline-code">keys\\*.bikey</span>.</div>
+        </div>
+        <div class="field">
+          <label>Название в панели <span class="badge">необязательно</span></label>
+          <input type="text" id="lm-name" placeholder="возьмётся из meta.cpp или имени папки">
+        </div>
+        <div class="field">
+          <label>Как подключить</label>
+          <select id="lm-type">
+            <option value="server" selected>Серверный — попадёт в -serverMod=</option>
+            <option value="client">Клиентский — попадёт в -mod=</option>
+          </select>
+          <div class="hint">Серверные моды не требуются игрокам: их видит только сервер.</div>
+        </div>
+      </div>
+      <div class="notice info" style="margin-top:16px"><span class="ic">${icon('info')}</span>
+        <div>Если папка лежит вне каталога сервера, панель скопирует (или симлинкнет — по настройке
+        раскладки) её внутрь при добавлении и при каждом запуске. Если она уже внутри — панель
+        ничего не трогает и работает с ней на месте.</div></div>`,
+    footer: `
+      <span class="spacer"></span>
+      <button class="btn" data-close>Отмена</button>
+      <button class="btn btn-primary" id="lm-add">${icon('plus')} Подключить мод</button>`
+  });
+
+  const pathInput = m.root.querySelector('#lm-path');
+
+  const submit = async (e) =>
+    busy(e.currentTarget, async () => {
+      const value = pathInput.value.trim();
+      if (!value) {
+        pathInput.classList.add('invalid');
+        return toast('Укажите путь к папке мода', 'warn');
+      }
+
+      const data = await api.addLocalMod({
+        path: value,
+        name: m.root.querySelector('#lm-name').value.trim(),
+        type: m.root.querySelector('#lm-type').value
+      });
+
+      toast(`Локальный мод «${data.mod.name}» подключён`, 'ok');
+      m.close();
+      render(data);
+      await refreshServers();
+    });
+
+  m.root.querySelector('#lm-add').addEventListener('click', submit);
+  pathInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') m.root.querySelector('#lm-add').click();
+  });
 }
 
 /** Не загрузилось превью из Steam (нет интернета или картинку удалили) — рисуем заглушку. */
@@ -264,11 +416,12 @@ export function openSearchModal() {
     wide: true,
     body: `
       <div class="row" style="gap:8px">
-        <input type="search" id="ws-q" placeholder="Например: Trader, BuilderItems, 1559212036 или ссылка на Workshop"
+        <input type="search" id="ws-q" placeholder="Название мода, Workshop ID, ссылка на мод или на коллекцию"
                autocomplete="off" style="flex:1">
         <button class="btn btn-primary" id="ws-go">${icon('search')} Найти</button>
       </div>
       <div class="hint" style="margin-top:8px">Поиск обращается к Steam — нужен интернет.
+        Вставьте ссылку на <b>коллекцию</b> — панель развернёт её и предложит добавить все моды сразу.
         По Workshop ID мод находится всегда, поиск по названию иногда зависит от выдачи Steam.</div>
 
       <div id="ws-results-box" style="margin-top:18px"></div>
@@ -359,14 +512,54 @@ export function openSearchModal() {
   }
 
   function renderResults(data) {
-    const modeLabel = { id: 'найдено по ID', api: 'поиск Steam Web API', community: 'поиск по странице Workshop' }[data.mode] || '';
+    const modeLabel = {
+      id: 'найдено по ID',
+      api: 'поиск Steam Web API',
+      community: 'поиск по странице Workshop',
+      collection: 'коллекция Workshop'
+    }[data.mode] || '';
+
+    const collection = data.mode === 'collection' ? data.collection : null;
 
     resultsBox.innerHTML = `
+      ${collection
+        ? `<div class="notice info mb" id="ws-collection">
+             <span class="ic">${icon('package')}</span>
+             <div style="flex:1">
+               <b>Коллекция «${esc(collection.title)}»</b><br>
+               Модов в коллекции: ${collection.declared}${
+                 collection.unavailable
+                   ? `, из них недоступно ${collection.unavailable} (скрыты или удалены автором)`
+                   : ''
+               }
+               <div class="row" style="margin-top:10px">
+                 <button class="btn btn-sm btn-primary" id="ws-add-all">
+                   ${icon('plus')} Добавить все ${data.items.length}</button>
+                 <button class="btn btn-sm" id="ws-clear-collection">Снять выделение</button>
+               </div>
+             </div>
+           </div>`
+        : ''}
       <div class="row" style="justify-content:space-between;margin-bottom:10px">
         <span class="small dim">Результатов: ${data.items.length}</span>
         <span class="small faint">${esc(modeLabel)}</span>
       </div>
       <div class="ws-results" id="ws-results"></div>`;
+
+    if (collection) {
+      resultsBox.querySelector('#ws-add-all').addEventListener('click', () => {
+        for (const item of data.items) cart.set(item.id, { ...item, collectionId: collection.id });
+        syncCart();
+        markResults();
+        toast(`Добавлено модов из коллекции: ${data.items.length}`, 'ok');
+      });
+
+      resultsBox.querySelector('#ws-clear-collection').addEventListener('click', () => {
+        for (const item of data.items) cart.delete(item.id);
+        syncCart();
+        markResults();
+      });
+    }
 
     const box = resultsBox.querySelector('#ws-results');
 
@@ -397,7 +590,7 @@ export function openSearchModal() {
 
       node.querySelector('[data-add]').addEventListener('click', () => {
         if (cart.has(item.id)) cart.delete(item.id);
-        else cart.set(item.id, item);
+        else cart.set(item.id, data.mode === 'collection' ? { ...item, collectionId: data.collection.id } : item);
         syncCart();
         markResults();
       });
@@ -425,6 +618,7 @@ export function openSearchModal() {
       name: i.title,
       preview: i.preview,
       sizeBytes: i.sizeBytes,
+      collectionId: i.collectionId || '',
       type: 'client'
     }));
 

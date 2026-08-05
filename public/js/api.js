@@ -55,6 +55,7 @@ export const api = {
   searchWorkshop: (q, page) => request('GET', `/workshop/search?q=${encodeURIComponent(q)}&page=${page || 1}`),
   downloadMods: (items) => request('POST', '/mods/download', { items }),
   adoptMod: (id, type) => request('POST', '/mods/adopt', { id, type }),
+  addLocalMod: (data) => request('POST', '/mods/local', data),
   patchMod: (id, patch) => request('PATCH', `/mods/${id}`, patch),
   deleteMod: (id, deleteFiles) => request('DELETE', `/mods/${id}${deleteFiles ? '?deleteFiles=1' : ''}`),
   reorderMods: (ids) => request('POST', '/mods/reorder', { ids }),

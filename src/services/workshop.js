@@ -74,28 +74,101 @@ function normalizeItem(raw) {
 
 /**
  * Подробности о модах по их ID. Ключ Web API не требуется.
+ * Запросы бьются на пачки — коллекции бывают на сотню элементов.
  * @param {string[]} ids
  */
 async function detailsByIds(ids) {
   const list = [...new Set(ids.map(String).filter(Boolean))];
   if (!list.length) return [];
 
-  const body = new URLSearchParams();
-  body.set('itemcount', String(list.length));
-  list.forEach((id, i) => body.set(`publishedfileids[${i}]`, id));
+  const out = [];
+  for (const chunk of chunks(list, 50)) {
+    const body = new URLSearchParams();
+    body.set('itemcount', String(chunk.length));
+    chunk.forEach((id, i) => body.set(`publishedfileids[${i}]`, id));
 
-  const res = await request(`${API_BASE}/ISteamRemoteStorage/GetPublishedFileDetails/v1/`, {
+    const res = await request(`${API_BASE}/ISteamRemoteStorage/GetPublishedFileDetails/v1/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    });
+
+    const data = await res.json();
+    const items = (data && data.response && data.response.publishedfiledetails) || [];
+    out.push(...items.filter((item) => Number(item.result) === 1 && item.publishedfileid).map(normalizeItem));
+  }
+  return out;
+}
+
+function chunks(list, size) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
+/* ---------------------------------------------------------------- коллекции */
+
+/**
+ * Состав коллекции Workshop. Ключ Web API не требуется.
+ * Возвращает пустой массив, если это не коллекция, а обычный мод.
+ * @param {string} id
+ * @returns {Promise<Array<{id: string, isCollection: boolean}>>}
+ */
+async function collectionChildren(id) {
+  const body = new URLSearchParams();
+  body.set('collectioncount', '1');
+  body.set('publishedfileids[0]', String(id));
+
+  const res = await request(`${API_BASE}/ISteamRemoteStorage/GetCollectionDetails/v1/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString()
   });
 
   const data = await res.json();
-  const items = (data && data.response && data.response.publishedfiledetails) || [];
+  const details = (data && data.response && data.response.collectiondetails) || [];
+  const entry = details[0];
+  if (!entry || Number(entry.result) !== 1 || !Array.isArray(entry.children)) return [];
 
-  return items
-    .filter((item) => Number(item.result) === 1 && item.publishedfileid)
-    .map(normalizeItem);
+  return entry.children
+    .filter((child) => child && child.publishedfileid)
+    .map((child) => ({
+      id: String(child.publishedfileid),
+      // filetype 2 — вложенная коллекция, всё остальное считаем модом
+      isCollection: Number(child.filetype) === 2
+    }));
+}
+
+/**
+ * Разворачиваем коллекцию в плоский список модов, включая вложенные коллекции.
+ * @param {string} id
+ * @param {{maxDepth?: number}} [opts]
+ * @returns {Promise<string[]>} id модов в порядке коллекции
+ */
+async function expandCollection(id, opts = {}) {
+  const maxDepth = opts.maxDepth ?? 3;
+  const seenCollections = new Set();
+  const items = [];
+  const seenItems = new Set();
+
+  async function walk(collectionId, depth) {
+    if (depth > maxDepth || seenCollections.has(collectionId)) return;
+    seenCollections.add(collectionId);
+
+    const children = await collectionChildren(collectionId);
+    for (const child of children) {
+      if (child.isCollection) {
+        await walk(child.id, depth + 1);
+        continue;
+      }
+      if (seenItems.has(child.id)) continue;
+      seenItems.add(child.id);
+      items.push(child.id);
+    }
+  }
+
+  await walk(String(id), 1);
+  return items;
 }
 
 /* --------------------------------------------------- поиск по названию (API) */
@@ -203,7 +276,42 @@ async function search(query, opts = {}) {
 
   const directId = extractId(text);
   if (directId) {
+    // Ссылка на коллекцию выглядит точно так же, как ссылка на мод, поэтому
+    // сначала проверяем, не коллекция ли это, и только потом — обычный мод.
     logger.info(SOURCE, `Поиск по ID ${directId}`);
+
+    let children = [];
+    try {
+      children = await expandCollection(directId);
+    } catch (err) {
+      logger.warn(SOURCE, `Не удалось проверить, коллекция ли это: ${err.message}`);
+    }
+
+    if (children.length) {
+      logger.info(SOURCE, `Это коллекция: ${children.length} мод(ов)`);
+      const [info] = await detailsByIds([directId]).catch(() => []);
+      const items = await detailsByIds(children);
+
+      // Steam отдаёт детали в своём порядке — восстанавливаем порядок коллекции.
+      const order = new Map(children.map((id, i) => [id, i]));
+      items.sort((a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999));
+
+      const missing = children.length - items.length;
+      return {
+        total: items.length,
+        items,
+        mode: 'collection',
+        collection: {
+          id: directId,
+          title: info ? info.title : `Коллекция ${directId}`,
+          preview: info ? info.preview : '',
+          declared: children.length,
+          unavailable: missing > 0 ? missing : 0
+        },
+        query: text
+      };
+    }
+
     const items = await detailsByIds([directId]);
     if (!items.length) throw new Error(`Мод с ID ${directId} не найден или скрыт автором`);
     return { total: items.length, items, mode: 'id', query: text };
@@ -229,4 +337,4 @@ async function search(query, opts = {}) {
   return { ...result, query: text };
 }
 
-module.exports = { search, detailsByIds, extractId, parseWorkshopIds };
+module.exports = { search, detailsByIds, extractId, parseWorkshopIds, collectionChildren, expandCollection };

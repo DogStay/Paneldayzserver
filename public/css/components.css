@@ -561,7 +561,7 @@ pre.code {
   border-radius: 5px;
   padding: 1px 6px;
   color: #b5cfa4;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------- уведомления */

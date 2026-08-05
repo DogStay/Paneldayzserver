@@ -122,6 +122,12 @@ function showScreen(name) {
 /* ---------------------------------------------------------------- старт */
 
 async function init() {
+  // Ошибки, о которых пользователь уже уведомлён тостом, не должны сыпаться
+  // в консоль браузера как необработанные промисы.
+  window.addEventListener('unhandledrejection', (e) => {
+    if (e.reason && e.reason.shownToUser) e.preventDefault();
+  });
+
   initConsole();
   initJobsDock();
   initServersScreen();

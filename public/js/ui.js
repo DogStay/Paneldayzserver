@@ -208,6 +208,9 @@ export async function busy(btn, fn) {
     return await fn();
   } catch (err) {
     toast(err.message, 'err');
+    // Ошибка уже показана пользователю: помечаем её, чтобы глобальный
+    // обработчик не дублировал сообщение в консоли браузера.
+    err.shownToUser = true;
     throw err;
   } finally {
     if (btn) btn.classList.remove('loading');

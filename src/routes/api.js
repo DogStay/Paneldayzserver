@@ -295,6 +295,41 @@ router.post(
   })
 );
 
+/** Подключить мод из собственной папки (локальный, чаще всего серверный). */
+router.post(
+  '/mods/local',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    if (!body.path) return res.status(400).json({ error: 'Укажите путь к папке мода' });
+
+    const serverId = serverIdOf(req);
+    let created;
+
+    const mod = await config.withServer(serverId, async () => {
+      try {
+        created = mods.addLocal({
+          path: body.path,
+          name: body.name,
+          type: body.type,
+          folder: body.folder
+        });
+      } catch (err) {
+        err.status = 400; // некорректный путь — это ошибка ввода, а не сбой панели
+        throw err;
+      }
+      // Если папка лежит вне каталога сервера — сразу переносим её на место.
+      try {
+        await mods.deploy(created);
+      } catch (err) {
+        logger.warn('mods', `Локальный мод добавлен, но не разложен: ${err.message}`);
+      }
+      return created;
+    });
+
+    res.json({ mod, ...mods.list() });
+  })
+);
+
 router.post(
   '/mods/reorder',
   wrap(async (req, res) => {

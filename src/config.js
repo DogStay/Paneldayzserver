@@ -199,6 +199,11 @@ function normalize(cfg) {
     s.mods = (Array.isArray(s.mods) ? s.mods : [])
       .map((m) => ({
         id: String(m.id || '').trim(),
+        // workshop — качается через SteamCMD; local — своя папка на диске,
+        // которую панель только раскладывает и не пытается обновлять.
+        source: m.source === 'local' ? 'local' : 'workshop',
+        localPath: m.localPath || '',
+        collectionId: m.collectionId || '',
         name: m.name || '',
         folder: m.folder || '',
         enabled: m.enabled !== false,

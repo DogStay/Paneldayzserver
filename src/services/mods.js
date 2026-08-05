@@ -84,7 +84,7 @@ function scanServerFolders(v = config.active()) {
 
 /** Полный список модов для интерфейса. */
 function list() {
-  if (!config.hasServers()) return { mods: [], orphans: [] };
+  if (!config.hasServers()) return { mods: [], orphans: [], localCandidates: [] };
 
   const v = config.active();
   const workshop = new Map(scanWorkshop(v).map((w) => [w.id, w]));
@@ -92,6 +92,8 @@ function list() {
   const installedState = steamcmd.readInstalledState(v);
 
   const items = v.mods.map((mod) => {
+    if (mod.source === 'local') return describeLocal(mod, v, serverFolders);
+
     const ws = workshop.get(mod.id);
     const state = installedState[mod.id] || {};
     const folder = mod.folder || folderNameFor(mod.id, ws ? ws.metaName : mod.name);
@@ -125,7 +127,65 @@ function list() {
       hasKeys: w.hasKeys
     }));
 
-  return { mods: items, orphans };
+  return { mods: items, orphans, localCandidates: scanLocalCandidates(v) };
+}
+
+/** Состояние локального мода: он не качается, а просто лежит в папке. */
+function describeLocal(mod, v, serverFolders) {
+  const folder = mod.folder || path.basename(mod.localPath || '') || `@${mod.id}`;
+  const source = mod.localPath || path.join(v.paths.serverPath, folder);
+  const sourceExists = Boolean(source && fs.existsSync(source));
+  const inPlace = isInsideServer(source, v) && path.basename(source) === folder;
+
+  return {
+    ...mod,
+    name: mod.name || folder.replace(/^@/, ''),
+    folder,
+    localPath: source,
+    downloaded: sourceExists,
+    deployed: sourceExists && (inPlace || serverFolders.has(folder)),
+    sizeMb: sourceExists ? dirSizeMb(source) : 0,
+    hasKeys: sourceExists ? Boolean(findKeysDir(source)) : false,
+    workshopPath: '',
+    installedManifest: '',
+    installedTimeupdated: 0,
+    remoteTimeupdated: 0,
+    updateAvailable: false,
+    inPlace
+  };
+}
+
+/**
+ * Папки @Мод, лежащие в каталоге сервера, но не подключённые в панели.
+ * Это готовые кандидаты в локальные моды — их можно подключить одной кнопкой.
+ */
+function scanLocalCandidates(v = config.active()) {
+  const known = new Set(v.mods.map((m) => m.folder).filter(Boolean));
+  const dir = v.paths.serverPath;
+  if (!dir || !fs.existsSync(dir)) return [];
+
+  return scanServerFolders(v)
+    .filter((folder) => !known.has(folder))
+    .map((folder) => {
+      const full = path.join(dir, folder);
+      const meta = readMeta(full);
+      return {
+        folder,
+        path: full,
+        name: meta.name || folder.replace(/^@/, ''),
+        // Мод из Workshop, положенный вручную, узнаётся по publishedid в meta.cpp
+        workshopId: meta.publishedId || '',
+        sizeMb: dirSizeMb(full),
+        hasKeys: Boolean(findKeysDir(full)),
+        hasAddons: fs.existsSync(path.join(full, 'addons')) || fs.existsSync(path.join(full, 'Addons'))
+      };
+    });
+}
+
+function isInsideServer(target, v = config.active()) {
+  if (!target || !v.paths.serverPath) return false;
+  const rel = path.relative(path.resolve(v.paths.serverPath), path.resolve(target));
+  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 /* -------------------------------------------------------------- состав списка */
@@ -139,13 +199,21 @@ function saveMods(mods) {
 function register(item) {
   const v = config.active();
   const id = String(item.id).trim();
-  if (!/^\d+$/.test(id)) throw new Error(`Некорректный Workshop ID: ${item.id}`);
+  const source = item.source === 'local' ? 'local' : 'workshop';
+
+  if (source === 'workshop' && !/^\d+$/.test(id)) {
+    throw new Error(`Некорректный Workshop ID: ${item.id}`);
+  }
+  if (!id) throw new Error('У мода нет идентификатора');
 
   const existing = v.mods.find((m) => m.id === id);
   if (existing) return existing;
 
   const mod = {
     id,
+    source,
+    localPath: source === 'local' ? item.localPath || '' : '',
+    collectionId: item.collectionId || '',
     name: item.name || id,
     folder: item.folder || '',
     enabled: item.enabled !== false,
@@ -161,6 +229,70 @@ function register(item) {
 
   saveMods([...v.mods, mod]);
   logger.info(SOURCE, `В список добавлен мод: ${mod.name} (${id})`);
+  return mod;
+}
+
+/* --------------------------------------------------------- локальные моды */
+
+/** Идентификатор локального мода: Workshop ID у него отсутствует. */
+function localIdFor(folder) {
+  const slug = String(folder)
+    .replace(/^@/, '')
+    .replace(/[^\wА-Яа-яЁё-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+  return `local_${slug || Date.now().toString(36)}`;
+}
+
+/**
+ * Подключить мод из своей папки — например, собственный серверный мод.
+ *
+ * Папка может лежать где угодно: если она уже внутри каталога сервера,
+ * панель ничего не копирует и работает с ней на месте; если снаружи —
+ * копирует (или симлинкает) её в каталог сервера при раскладке.
+ *
+ * @param {{path: string, name?: string, type?: string, folder?: string}} input
+ */
+function addLocal(input = {}) {
+  const v = config.active();
+  const raw = String(input.path || '').trim();
+  if (!raw) throw new Error('Укажите путь к папке мода');
+
+  // Относительный путь считаем от папки сервера — так удобнее вводить «@MyMod».
+  const source = path.isAbsolute(raw) ? raw : path.join(v.paths.serverPath, raw);
+
+  if (!fs.existsSync(source)) throw new Error(`Папка не найдена: ${source}`);
+  if (!fs.statSync(source).isDirectory()) throw new Error(`Это не папка: ${source}`);
+
+  const base = path.basename(source);
+  const folder = (input.folder || base).trim();
+  const normalizedFolder = folder.startsWith('@') ? folder : `@${folder}`;
+
+  if (v.mods.some((m) => m.folder === normalizedFolder)) {
+    throw new Error(`Мод с папкой ${normalizedFolder} уже есть в списке`);
+  }
+
+  const meta = readMeta(source);
+  const hasAddons = fs.existsSync(path.join(source, 'addons')) || fs.existsSync(path.join(source, 'Addons'));
+  if (!hasAddons) {
+    logger.warn(SOURCE, `В ${source} нет папки addons — убедитесь, что это действительно мод DayZ`);
+  }
+
+  const mod = register({
+    id: localIdFor(normalizedFolder),
+    source: 'local',
+    localPath: source,
+    folder: normalizedFolder,
+    name: input.name || meta.name || normalizedFolder.replace(/^@/, ''),
+    type: input.type === 'client' ? 'client' : 'server' // локальные моды чаще всего серверные
+  });
+
+  logger.info(
+    SOURCE,
+    `Локальный мод подключён: ${mod.name} → ${normalizedFolder} ` +
+      `(${mod.type === 'server' ? '-serverMod' : '-mod'}, источник ${source})`
+  );
+
   return mod;
 }
 
@@ -181,11 +313,20 @@ function remove(id, { deleteServerFolder = false } = {}) {
 
   if (deleteServerFolder && mod.folder) {
     const target = path.join(v.paths.serverPath, mod.folder);
-    try {
-      removeIfExists(target);
-      logger.info(SOURCE, `Удалена папка мода: ${target}`);
-    } catch (err) {
-      logger.warn(SOURCE, `Не удалось удалить ${target}: ${err.message}`);
+    const isOwnFolder =
+      mod.source === 'local' && mod.localPath && path.resolve(mod.localPath) === path.resolve(target);
+
+    if (isOwnFolder) {
+      // Это исходная папка пользователя, а не копия, сделанная панелью.
+      // Удалять её нельзя — панель лишь забывает про мод.
+      logger.info(SOURCE, `Папка локального мода оставлена на диске: ${target}`);
+    } else {
+      try {
+        removeIfExists(target);
+        logger.info(SOURCE, `Удалена папка мода: ${target}`);
+      } catch (err) {
+        logger.warn(SOURCE, `Не удалось удалить ${target}: ${err.message}`);
+      }
     }
   }
 
@@ -243,8 +384,10 @@ function adoptExisting(id, opts = {}) {
  * @param {{onProgress?: (p: {percent: number, step: string}) => void}} [opts]
  */
 async function downloadMany(items, opts = {}) {
-  const list = items.map((i) => (typeof i === 'string' ? { id: i } : i)).filter((i) => i && i.id);
-  if (!list.length) throw new Error('Список модов пуст');
+  const list = items
+    .map((i) => (typeof i === 'string' ? { id: i } : i))
+    .filter((i) => i && i.id && i.source !== 'local' && /^\d+$/.test(String(i.id)));
+  if (!list.length) throw new Error('Список модов пуст — для загрузки нужны моды из Workshop');
 
   for (const item of list) register(item);
 
@@ -330,14 +473,28 @@ function findKeysDir(modDir) {
 /** Скопировать (или симлинкнуть) мод в папку сервера и разложить ключи. */
 async function deploy(mod, opts = {}) {
   const v = config.active();
-  const source = steamcmd.itemPath(mod.id, v);
+  const isLocal = mod.source === 'local';
   const folder = mod.folder || folderNameFor(mod.id, mod.name);
+  const source = isLocal
+    ? mod.localPath || path.join(v.paths.serverPath, folder)
+    : steamcmd.itemPath(mod.id, v);
   const target = path.join(v.paths.serverPath, folder);
 
   if (!v.paths.serverPath || !fs.existsSync(v.paths.serverPath)) {
     throw new Error(`Папка сервера не найдена: ${v.paths.serverPath}`);
   }
-  if (!fs.existsSync(source)) throw new Error(`Контент мода не скачан: ${source}`);
+  if (!fs.existsSync(source)) {
+    throw new Error(isLocal ? `Папка локального мода исчезла: ${source}` : `Контент мода не скачан: ${source}`);
+  }
+
+  // Локальный мод может уже лежать прямо в каталоге сервера. Тогда копировать
+  // нечего, и — важнее — нельзя трогать target: это и есть исходная папка.
+  if (path.resolve(source) === path.resolve(target)) {
+    logger.info(SOURCE, `${folder}: локальный мод уже на месте, копирование не требуется`);
+    copyKeys(source, v);
+    patch(mod.id, { folder, lastDeployed: new Date().toISOString(), missing: false });
+    return target;
+  }
 
   const symlink = v.features.deployMode === 'symlink';
 
@@ -421,12 +578,28 @@ async function deployAll(ids = null) {
  */
 async function checkAndUpdate(opts = {}) {
   const v = config.active();
-  const enabled = v.mods.filter((m) => m.enabled);
+  const enabledAll = v.mods.filter((m) => m.enabled);
+  const enabled = enabledAll.filter((m) => m.source !== 'local');
+  const local = enabledAll.filter((m) => m.source === 'local');
   const notify = (percent, step) => opts.onProgress && opts.onProgress({ percent, step });
 
+  // Локальные моды в Steam не проверяются, но разложить их всё равно надо.
+  for (const mod of local) {
+    try {
+      await deploy(mod);
+    } catch (err) {
+      logger.error(SOURCE, `Локальный мод ${mod.name}: ${err.message}`);
+    }
+  }
+
   if (!enabled.length) {
-    logger.info(SOURCE, 'Включённых модов нет — проверка обновлений пропущена');
-    return { checked: 0, updated: [], failed: [], skipped: true };
+    logger.info(
+      SOURCE,
+      local.length
+        ? `Обновлять нечего: включены только локальные моды (${local.length})`
+        : 'Включённых модов нет — проверка обновлений пропущена'
+    );
+    return { checked: 0, updated: [], failed: [], skipped: true, local: local.length };
   }
 
   logger.info(SOURCE, `Проверка обновлений через SteamCMD для ${enabled.length} мод(ов)…`);
@@ -534,6 +707,8 @@ function dirSizeMb(dir) {
 module.exports = {
   list,
   register,
+  addLocal,
+  scanLocalCandidates,
   downloadMany,
   addByWorkshopId,
   adoptExisting,
