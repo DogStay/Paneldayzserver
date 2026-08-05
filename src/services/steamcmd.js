@@ -581,6 +581,91 @@ function registerInstalled(id, v, sizeBytes) {
 }
 
 /**
+ * Забыть мод в appworkshop_<appid>.acf — обратная операция к registerInstalled.
+ *
+ * Без этого SteamCMD продолжает считать удалённый мод установленным: файлов на
+ * диске нет, а `workshop_download_item` отвечает «уже актуально» и ничего не
+ * качает. Поэтому полное удаление обязано вычистить и запись о версии.
+ *
+ * @returns {{changed: boolean, file: string, sections: string[], reason?: string}}
+ */
+function forgetInstalled(id, v = config.active()) {
+  const file = acfPath(v);
+  if (!file || !fs.existsSync(file)) {
+    return { changed: false, file: file || '', sections: [], reason: 'файл состояния SteamCMD не найден' };
+  }
+
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    let text = raw;
+    const sections = [];
+
+    for (const section of ['WorkshopItemsInstalled', 'WorkshopItemDetails']) {
+      const result = vdf.removeKeyBlock(text, section, String(id));
+      if (result.removed) {
+        text = result.text;
+        sections.push(section);
+      }
+    }
+
+    if (!sections.length) {
+      return { changed: false, file, sections, reason: 'записи о моде в файле состояния не было' };
+    }
+
+    fs.copyFileSync(file, `${file}.backup`);
+    fs.writeFileSync(file, text, 'utf8');
+
+    logger.info(SOURCE, `Мод ${id} убран из файла состояния SteamCMD (${sections.join(', ')})`);
+    return { changed: true, file, sections };
+  } catch (err) {
+    logger.warn(SOURCE, `Не удалось убрать мод ${id} из файла состояния: ${err.message}`);
+    return { changed: false, file, sections: [], reason: err.message };
+  }
+}
+
+/**
+ * Удалить скачанные файлы мода из репозитория SteamCMD: и сам контент
+ * (steamapps/workshop/content/<appid>/<id>), и остатки незавершённой
+ * закачки в steamapps/workshop/downloads.
+ *
+ * @returns {{contentPath: string, downloadsPath: string, contentRemoved: boolean,
+ *            downloadsRemoved: boolean, freedBytes: number}}
+ */
+function removeItemFiles(id, v = config.active()) {
+  const workshopId = String(id).trim();
+  if (!/^\d+$/.test(workshopId)) throw new Error(`Некорректный Workshop ID: ${id}`);
+
+  const content = itemPath(workshopId, v);
+  const downloads = downloadDir(workshopId, v);
+  const result = {
+    contentPath: content,
+    downloadsPath: downloads,
+    contentRemoved: false,
+    downloadsRemoved: false,
+    freedBytes: 0
+  };
+
+  // Страховка от удаления не той папки: путь обязан заканчиваться именно на ID.
+  for (const [key, dir] of [['contentRemoved', content], ['downloadsRemoved', downloads]]) {
+    if (!dir || path.basename(dir) !== workshopId || !fs.existsSync(dir)) continue;
+
+    result.freedBytes += dirSize(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    result[key] = true;
+  }
+
+  if (result.contentRemoved || result.downloadsRemoved) {
+    logger.warn(
+      SOURCE,
+      `Файлы мода ${workshopId} удалены из репозитория SteamCMD: ` +
+        [result.contentRemoved && content, result.downloadsRemoved && downloads].filter(Boolean).join(', ')
+    );
+  }
+
+  return result;
+}
+
+/**
  * Скачать один мод, при необходимости — за несколько попыток.
  *
  * Моды на 8–10 ГБ регулярно обрываются по таймауту SteamCMD
@@ -1088,6 +1173,9 @@ module.exports = {
   downloadDir,
   rescueDownloadedItem,
   readInstalledState,
+  forgetInstalled,
+  removeItemFiles,
+  dirSize,
   itemPath,
   itemExists,
   steamInstallDir,

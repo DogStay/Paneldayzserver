@@ -20,6 +20,7 @@ import { initModsTab, askStopServer } from './mods.js';
 import { initSettingsTab } from './settings.js';
 import { initToolsTabs } from './tools.js';
 import { initDiagnosticsTab } from './diagnostics.js';
+import { initCFToolsTab } from './cftools.js';
 
 const TABS = [
   { id: 'overview', label: 'Обзор', icon: 'activity' },
@@ -28,6 +29,9 @@ const TABS = [
   { id: 'cfg', label: 'Конфигурация', icon: 'file' },
   { id: 'bat', label: 'Файл запуска', icon: 'terminal' },
   { id: 'firewall', label: 'Порты', icon: 'shield' },
+  // Вкладка нужна только тем, кто пользуется CFTools: скрыта, пока интеграция
+  // выключена в настройках сервера.
+  { id: 'cftools', label: 'CFTools', icon: 'link', optional: true },
   { id: 'diag', label: 'Диагностика', icon: 'bug' }
 ];
 
@@ -55,7 +59,11 @@ export function initDashboardScreen() {
   initModsTab($('#pane-mods'));
   initSettingsTab($('#pane-settings'));
   initToolsTabs({ cfg: $('#pane-cfg'), bat: $('#pane-bat'), firewall: $('#pane-firewall') });
+  initCFToolsTab($('#pane-cftools'));
   initDiagnosticsTab($('#pane-diag'));
+
+  on('config', syncOptionalTabs);
+  syncOptionalTabs();
 
   on('server-status', () => {
     renderHead();
@@ -93,7 +101,18 @@ export function initDashboardScreen() {
 export function showDashboard() {
   renderHead();
   updateModsCount();
+  syncOptionalTabs();
   showTab(currentTab);
+}
+
+/** Вкладки необязательных интеграций видны только когда те включены. */
+function syncOptionalTabs() {
+  const cfEnabled = Boolean(state.config && state.config.cftools && state.config.cftools.enabled);
+  const tab = document.querySelector('#dash-tabs [data-tab="cftools"]');
+  if (tab) tab.classList.toggle('hidden', !cfEnabled);
+
+  // Интеграцию могли выключить, пока её вкладка открыта.
+  if (!cfEnabled && currentTab === 'cftools') showTab('overview');
 }
 
 export function showTab(id) {

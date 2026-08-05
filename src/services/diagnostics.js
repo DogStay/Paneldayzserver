@@ -24,6 +24,7 @@ const logger = require('../logger');
 const steamcmd = require('./steamcmd');
 const batgen = require('./batgen');
 const mods = require('./mods');
+const missions = require('./missions');
 const logTail = require('./logTail');
 const cp866 = require('../util/cp866');
 
@@ -47,6 +48,16 @@ function exists(target) {
   } catch (_) {
     return 'НЕ НАЙДЕН';
   }
+}
+
+/** Есть ли выбранная миссия на диске: без неё сервер падает сразу после старта. */
+function missionState(v) {
+  const problems = missions.problems(v);
+  if (problems.length) return `ПРОБЛЕМА: ${problems.join('; ')}`;
+
+  const dir = missions.missionsDir(v);
+  if (!dir || !fs.existsSync(dir)) return 'папки mpmissions ещё нет';
+  return 'миссия найдена';
 }
 
 function formatBytes(bytes) {
@@ -161,11 +172,17 @@ function serverSection(server, status) {
   out.push(`  Слотов:         ${v.server.maxPlayers}`);
   out.push(`  Игровой порт:   ${v.server.gamePort} (UDP)`);
   out.push(`  Query порт:     ${v.server.steamQueryPort}`);
-  out.push(`  Карта:          ${v.server.mission}`);
+  out.push(`  Карта:          ${v.server.mission} — ${missionState(v)}`);
   out.push(`  Пароль входа:   ${v.server.password ? 'задан' : 'нет'}`);
   out.push(`  Пароль админа:  ${v.server.adminPassword ? 'задан' : 'нет'}`);
   out.push(`  Доп. порты:     ${v.server.extraPorts.map((p) => `${p.protocol} ${p.from}-${p.to}`).join(', ') || '—'}`);
   out.push(`  Флаги:          ${JSON.stringify(v.features)}`);
+  out.push(
+    `  CFTools:        ${v.cftools.enabled
+      ? `включён (ключи ${v.cftools.applicationId && v.cftools.secret ? 'заданы' : 'НЕ заданы'}, ` +
+        `сервер ${v.cftools.serverApiId || '—'}, банлист ${v.cftools.banlistId || '—'})`
+      : 'выключен'}`
+  );
 
   if (status) {
     out.push('');

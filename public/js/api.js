@@ -57,7 +57,17 @@ export const api = {
   adoptMod: (id, type) => request('POST', '/mods/adopt', { id, type }),
   addLocalMod: (data) => request('POST', '/mods/local', data),
   patchMod: (id, patch) => request('PATCH', `/mods/${id}`, patch),
-  deleteMod: (id, deleteFiles) => request('DELETE', `/mods/${id}${deleteFiles ? '?deleteFiles=1' : ''}`),
+  modRemovalInfo: (id) => request('GET', `/mods/${id}/removal-info`),
+  /** opts: { deleteFiles, deleteWorkshop, deleteKeys, force } */
+  deleteMod: (id, opts) => {
+    const flags = typeof opts === 'boolean' ? { deleteFiles: opts } : opts || {};
+    const query = Object.entries(flags)
+      .filter(([, value]) => value)
+      .map(([key]) => `${key}=1`)
+      .join('&');
+    return request('DELETE', `/mods/${id}${query ? `?${query}` : ''}`);
+  },
+  deleteWorkshopItem: (id, force) => request('DELETE', `/mods/workshop/${id}${force ? '?force=1' : ''}`),
   reorderMods: (ids) => request('POST', '/mods/reorder', { ids }),
   updateMods: (opts) => request('POST', '/mods/update', opts || {}),
   forceUpdateMod: (id, opts) => request('POST', `/mods/${id}/force-update`, opts || {}),
@@ -78,6 +88,24 @@ export const api = {
   serverCfg: () => request('GET', '/servercfg'),
   saveServerCfg: (content) => request('PUT', '/servercfg', { content }),
   syncServerCfg: () => request('POST', '/servercfg/sync', {}),
+
+  missions: () => request('GET', '/missions'),
+  selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
+
+  /* CFTools Cloud — работают только при включённой интеграции */
+  cfStatus: () => request('GET', '/cftools/status'),
+  cfTest: () => request('POST', '/cftools/test', {}),
+  cfGrants: () => request('GET', '/cftools/grants'),
+  cfServer: () => request('GET', '/cftools/server'),
+  cfPlayers: () => request('GET', '/cftools/players'),
+  cfPlayer: (cftoolsId) => request('GET', `/cftools/player?cftoolsId=${encodeURIComponent(cftoolsId)}`),
+  cfKick: (sessionId, reason) => request('POST', '/cftools/kick', { sessionId, reason }),
+  cfMessage: (sessionId, content) => request('POST', '/cftools/message', { sessionId, content }),
+  cfBroadcast: (content) => request('POST', '/cftools/broadcast', { content }),
+  cfRcon: (command) => request('POST', '/cftools/rcon', { command }),
+  cfBans: (filter) => request('GET', `/cftools/bans${filter ? `?filter=${encodeURIComponent(filter)}` : ''}`),
+  cfBan: (data) => request('POST', '/cftools/bans', data),
+  cfUnban: (banId) => request('DELETE', `/cftools/bans/${encodeURIComponent(banId)}`),
 
   diagnostics: () => request('GET', '/diagnostics'),
   buildReport: () => request('POST', '/diagnostics', {}),

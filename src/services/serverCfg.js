@@ -17,12 +17,8 @@ const logger = require('../logger');
 
 const SOURCE = 'servercfg';
 
-/** Карты, доступные в мастере создания сервера. */
-const MISSIONS = [
-  { value: 'dayzOffline.chernarusplus', label: 'Chernarus+ (Черноруссия)' },
-  { value: 'dayzOffline.enoch', label: 'Livonia (Ливония)' },
-  { value: 'dayzOffline.sakhal', label: 'Sakhal (Сахал)' }
-];
+// Список карт живёт в services/missions.js: он собирается из mpmissions
+// конкретного сервера, а не задаётся здесь константой.
 
 function template(v) {
   return `// serverDZ.cfg — создан панелью DayZ Panel
@@ -152,4 +148,4 @@ function sync(serverId) {
   };
 }
 
-module.exports = { read, write, sync, ensureExists, template, MISSIONS };
+module.exports = { read, write, sync, ensureExists, template };

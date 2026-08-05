@@ -19,6 +19,12 @@
     "steamcmdExe": "C:\\SteamCMD\\steamcmd.exe",
     "workshopContentDir": ""
   },
+
+  "cftools": {
+    "enabled": false,
+    "applicationId": "",
+    "secret": ""
+  },
   "activeServerId": null,
   "servers": [],
 
@@ -71,6 +77,10 @@
       "patchServerCfg": true,
       "regenerateBatOnStart": true,
       "launchMode": "exe"
+    },
+    "cftools": {
+      "serverApiId": "",
+      "banlistId": ""
     },
     "mods": []
   }

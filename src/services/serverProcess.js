@@ -30,6 +30,7 @@ const firewall = require('./firewall');
 const batgen = require('./batgen');
 const mods = require('./mods');
 const serverCfg = require('./serverCfg');
+const missions = require('./missions');
 const logTail = require('./logTail');
 const diagnostics = require('./diagnostics');
 const modIssues = require('./modIssues');
@@ -178,6 +179,10 @@ function validate(serverId) {
   if (v.paths.serverPath && fs.existsSync(v.paths.serverPath) && !fs.existsSync(exe)) {
     problems.push(`Не найден исполняемый файл сервера: ${exe}. Установите файлы сервера через SteamCMD.`);
   }
+
+  // Опечатка в имени миссии — частая причина «сервер запустился и сразу упал»:
+  // движок не находит карту и закрывается почти без объяснений.
+  problems.push(...missions.problems(v));
 
   if (v.features.autoUpdateMods && v.mods.some((m) => m.enabled)) {
     if (!v.paths.steamcmdExe) problems.push('Включено автообновление модов, но не указан путь к steamcmd.exe');

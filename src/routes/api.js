@@ -23,6 +23,8 @@ const mods = require('../services/mods');
 const batgen = require('../services/batgen');
 const firewall = require('../services/firewall');
 const serverCfg = require('../services/serverCfg');
+const missions = require('../services/missions');
+const cftools = require('../services/cftools');
 const serverProcess = require('../services/serverProcess');
 const diagnostics = require('../services/diagnostics');
 const scheduler = require('../services/scheduler');
@@ -111,7 +113,7 @@ router.get('/servers/suggest', (req, res) => {
   res.json({
     ...ports,
     serverPath: instances.suggestPath(req.query.name || 'DayZServer'),
-    missions: serverCfg.MISSIONS
+    missions: missions.catalogue()
   });
 });
 
@@ -223,6 +225,7 @@ router.put(
     // Пустая строка секрета означает «не менять», а не «стереть».
     if (patch.steam && patch.steam.password === '') delete patch.steam.password;
     if (patch.steam && patch.steam.webApiKey === '') delete patch.steam.webApiKey;
+    if (patch.cftools && patch.cftools.secret === '') delete patch.cftools.secret;
     delete patch.servers;
     delete patch.activeServerId;
 
@@ -235,6 +238,8 @@ router.put(
     }
 
     const next = config.updateRoot(patch);
+    // Ключи приложения могли измениться — прежний токен CFTools больше не нужен.
+    if (patch.cftools) cftools.resetToken();
     logger.setMaxLines(next.panel.logBufferLines);
     logger.info('panel', 'Общие настройки сохранены');
     res.json(config.publicView());
@@ -426,11 +431,29 @@ router.patch(
   })
 );
 
+/** Что будет удалено вместе с модом — для диалога подтверждения. */
+router.get('/mods/:id/removal-info', wrap(async (req, res) => res.json(mods.removalInfo(req.params.id))));
+
 router.delete(
   '/mods/:id',
   wrap(async (req, res) => {
-    mods.remove(req.params.id, { deleteServerFolder: req.query.deleteFiles === '1' });
-    res.json(mods.list());
+    const report = mods.remove(req.params.id, {
+      deleteServerFolder: req.query.deleteFiles === '1',
+      // Полное удаление: файлы в steamapps/workshop/content и запись о версии.
+      deleteWorkshop: req.query.deleteWorkshop === '1',
+      deleteKeys: req.query.deleteKeys === '1',
+      force: req.query.force === '1'
+    });
+    res.json({ report, ...mods.list() });
+  })
+);
+
+/** Удалить из репозитория SteamCMD мод, не подключённый ни к одному серверу. */
+router.delete(
+  '/mods/workshop/:id',
+  wrap(async (req, res) => {
+    const result = mods.removeWorkshopItem(req.params.id, { force: req.query.force === '1' });
+    res.json({ result, ...mods.list() });
   })
 );
 
@@ -467,6 +490,21 @@ router.put(
 );
 
 router.post('/servercfg/sync', wrap(async (req, res) => res.json(serverCfg.sync(serverIdOf(req)))));
+
+/* ------------------------------------------------------------------- карты */
+
+/** Список миссий (карт) из mpmissions выбранного сервера. */
+router.get('/missions', wrap(async (req, res) => res.json(missions.list(serverIdOf(req)))));
+
+/** Выбрать карту: правит настройки сервера и serverDZ.cfg. */
+router.post(
+  '/missions/select',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const result = missions.select(serverIdOf(req), body.mission, { force: body.force === true });
+    res.json({ ...result, ...missions.list(serverIdOf(req)) });
+  })
+);
 
 /* ------------------------------------------------------------------- сервер */
 
@@ -515,6 +553,74 @@ router.post(
 
     res.json({ job });
   })
+);
+
+/* ---------------------------------------------------------------- CFTools */
+
+/*
+ * Все маршруты работают только когда интеграция включена и заполнены ключи —
+ * проверку делает сам сервис и объясняет, чего именно не хватает.
+ */
+
+router.get('/cftools/status', (req, res) => res.json(cftools.status(serverIdOf(req))));
+
+router.post('/cftools/test', wrap(async (req, res) => res.json(await cftools.test(serverIdOf(req)))));
+
+router.get('/cftools/grants', wrap(async (req, res) => res.json(await cftools.grants())));
+
+router.get('/cftools/server', wrap(async (req, res) => res.json(await cftools.serverInfo(serverIdOf(req)))));
+
+router.get(
+  '/cftools/players',
+  wrap(async (req, res) => res.json({ players: await cftools.players(serverIdOf(req)) }))
+);
+
+router.get(
+  '/cftools/player',
+  wrap(async (req, res) => res.json(await cftools.playerStats(serverIdOf(req), req.query.cftoolsId)))
+);
+
+router.get('/cftools/lookup', wrap(async (req, res) => res.json(await cftools.lookup(req.query.identifier))));
+
+router.post(
+  '/cftools/kick',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    res.json(await cftools.kick(serverIdOf(req), body.sessionId, body.reason));
+  })
+);
+
+router.post(
+  '/cftools/message',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    res.json(await cftools.messagePrivate(serverIdOf(req), body.sessionId, body.content));
+  })
+);
+
+router.post(
+  '/cftools/broadcast',
+  wrap(async (req, res) => res.json(await cftools.broadcast(serverIdOf(req), (req.body || {}).content)))
+);
+
+router.post(
+  '/cftools/rcon',
+  wrap(async (req, res) => res.json(await cftools.rcon(serverIdOf(req), (req.body || {}).command)))
+);
+
+router.get(
+  '/cftools/bans',
+  wrap(async (req, res) => res.json({ bans: await cftools.listBans(serverIdOf(req), req.query.filter) }))
+);
+
+router.post(
+  '/cftools/bans',
+  wrap(async (req, res) => res.json(await cftools.createBan(serverIdOf(req), req.body || {})))
+);
+
+router.delete(
+  '/cftools/bans/:banId',
+  wrap(async (req, res) => res.json(await cftools.deleteBan(serverIdOf(req), req.params.banId)))
 );
 
 /* ----------------------------------------------------------------- задачи */

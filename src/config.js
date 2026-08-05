@@ -177,6 +177,12 @@ function normalize(cfg) {
   // меньше входов и тем дальше «Rate Limit Exceeded».
   c.steam.batchSize = clamp(toInt(c.steam.batchSize, 25), 1, 100);
 
+  // Интеграция с CFTools Cloud — по умолчанию выключена и никуда не ходит.
+  c.cftools = c.cftools || {};
+  c.cftools.enabled = Boolean(c.cftools.enabled);
+  c.cftools.applicationId = String(c.cftools.applicationId || '').trim();
+  c.cftools.secret = String(c.cftools.secret || '').trim();
+
   c.servers = (Array.isArray(c.servers) ? c.servers : []).map((raw) => {
     const s = merge(defaults.serverTemplate, raw);
     s.id = s.id || newId();
@@ -254,6 +260,12 @@ function normalize(cfg) {
         manualInstall: Boolean(m.manualInstall)
       }))
       .filter((m) => m.id);
+
+    // ID ресурсов CFTools у каждого сервера свои: ключи приложения общие,
+    // а сервер и банлист в CFTools — конкретные.
+    s.cftools = s.cftools || {};
+    s.cftools.serverApiId = String(s.cftools.serverApiId || '').trim();
+    s.cftools.banlistId = String(s.cftools.banlistId || '').trim();
 
     if (s.features.deployMode !== 'symlink') s.features.deployMode = 'copy';
     if (s.features.launchMode !== 'bat') s.features.launchMode = 'exe';
@@ -382,6 +394,7 @@ function view(serverId) {
     panel: cfg.panel,
     steam: cfg.steam,
     paths: { ...cfg.paths, ...instance.paths },
+    cftools: { ...cfg.cftools, ...instance.cftools },
     server: instance.server,
     restart: instance.restart,
     features: instance.features,
@@ -439,6 +452,9 @@ function publicView() {
   copy.steam.hasPassword = Boolean(cfg.steam.password);
   copy.steam.webApiKey = '';
   copy.steam.hasWebApiKey = Boolean(cfg.steam.webApiKey);
+
+  copy.cftools.secret = '';
+  copy.cftools.hasSecret = Boolean(cfg.cftools.secret);
 
   copy.servers = copy.servers.map((s) => {
     const v = view(s.id);

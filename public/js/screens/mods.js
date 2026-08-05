@@ -163,15 +163,37 @@ function render(data = state.mods) {
             <div class="mod-name">${esc(item.name)}</div>
             <div class="mod-meta"><span>ID ${item.id}</span><span>${esc(item.folder)}</span><span>${item.sizeMb} МБ</span></div>
           </div>
-          <div class="mod-actions"><button class="btn btn-sm btn-primary">${icon('plus')} Подключить</button></div>
+          <div class="mod-actions">
+            <button class="btn btn-sm btn-primary" data-act="adopt">${icon('plus')} Подключить</button>
+            <button class="btn btn-sm btn-danger btn-icon" data-act="purge"
+                    title="Удалить файлы из репозитория SteamCMD">${icon('trash')}</button>
+          </div>
         </div>`);
 
-      row.querySelector('button').addEventListener('click', (e) =>
+      row.querySelector('[data-act="adopt"]').addEventListener('click', (e) =>
         busy(e.currentTarget, async () => {
           await api.adoptMod(item.id);
           toast(`Мод «${item.name}» подключён`, 'ok');
           await refreshMods();
           await refreshServers();
+        })
+      );
+
+      row.querySelector('[data-act="purge"]').addEventListener('click', (e) =>
+        busy(e.currentTarget, async () => {
+          const yes = await confirmDialog({
+            title: 'Удалить скачанный мод с диска?',
+            message: `<b>${esc(item.name)}</b> (ID ${esc(item.id)}) не подключён ни к одному серверу панели.<br><br>
+              Из репозитория SteamCMD будут удалены его файлы (${item.sizeMb} МБ) и запись о версии.
+              Если мод понадобится снова, его придётся скачать заново.`,
+            confirmText: 'Удалить с диска',
+            danger: true
+          });
+          if (!yes) return;
+
+          const { result } = await api.deleteWorkshopItem(item.id);
+          toast(`Файлы мода удалены, освобождено ${fmtBytes(result.freedBytes)}`, 'ok', 9000);
+          await refreshMods();
         })
       );
       orphanList.appendChild(row);
@@ -317,29 +339,134 @@ function modRow(mod) {
     })
   );
 
-  row.querySelector('[data-act="remove"]').addEventListener('click', async () => {
-    const yes = await confirmDialog({
-      title: 'Удалить модификацию?',
-      message: isLocal
-        ? `<b>${esc(mod.name)}</b> будет убран из списка сервера.<br><br>
-           ${mod.inPlace
-             ? 'Ваша папка <span class="inline-code">' + esc(mod.folder) + '</span> останется на диске нетронутой — панель просто забудет о моде.'
-             : 'Копия в каталоге сервера будет удалена, исходная папка <span class="inline-code">' + esc(mod.localPath) + '</span> останется на месте.'}`
-        : `<b>${esc(mod.name)}</b> будет убран из списка сервера, а папка
-           <span class="inline-code">${esc(mod.folder)}</span> удалена из каталога сервера.<br><br>
-           Скачанные файлы в workshop-папке SteamCMD останутся — мод можно будет подключить снова без повторной загрузки.`,
-      confirmText: 'Удалить',
-      danger: true
-    });
-    if (!yes) return;
-
-    await api.deleteMod(mod.id, true);
-    toast('Мод удалён', 'ok');
-    await refreshMods();
-    await refreshServers();
-  });
+  row.querySelector('[data-act="remove"]').addEventListener('click', () => openRemoveModal(mod));
 
   return row;
+}
+
+/* ----------------------------------------------------------- удаление мода */
+
+const fmtMb = (mb) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} ГБ` : `${mb} МБ`);
+
+/**
+ * Окно удаления мода: панель сначала спрашивает сервер, что именно лежит на
+ * диске, и предлагает удалить это по уровням — от «убрать из списка» до
+ * полного удаления скачанных файлов из репозитория SteamCMD.
+ */
+export function openRemoveModal(mod) {
+  const m = modal({
+    title: `Удалить «${mod.name}»?`,
+    subtitle: 'Выберите, что удалить с диска',
+    icon: 'trash',
+    wide: true,
+    body: '<div class="small faint" id="rm-body">Считаю, что лежит на диске…</div>',
+    footer: `
+      <span class="spacer"></span>
+      <button class="btn" data-close>Отмена</button>
+      <button class="btn btn-danger" id="rm-go" disabled>${icon('trash')} Удалить</button>`
+  });
+
+  const goBtn = m.footer.querySelector('#rm-go');
+
+  (async () => {
+    let info;
+    try {
+      info = await api.modRemovalInfo(mod.id);
+    } catch (err) {
+      m.body.querySelector('#rm-body').innerHTML =
+        `<div class="notice err"><span class="ic">${icon('alert')}</span><div>${esc(err.message)}</div></div>`;
+      return;
+    }
+
+    const isLocal = info.source === 'local';
+    const used = info.usedByOtherServers || [];
+
+    m.body.innerHTML = `
+      <div class="col" style="gap:14px">
+        <div class="notice info"><span class="ic">${icon('info')}</span>
+          <div>Из списка модов этого сервера мод будет убран в любом случае.
+          ${isLocal ? '' : `Workshop ID <span class="inline-code">${esc(info.id)}</span>.`}</div></div>
+
+        ${used.length
+          ? `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+              <div><b>Мод используют другие серверы панели:</b> ${used.map((s) => esc(s.name)).join(', ')}.<br>
+              Репозиторий SteamCMD общий на всю панель — удалять из него файлы можно только принудительно,
+              и тогда этим серверам мод придётся скачать заново.</div></div>`
+          : ''}
+
+        ${info.serverRunning
+          ? `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+              <div>Сервер запущен и держит файлы модов открытыми — папку из каталога сервера
+              удалить не получится. Остановите сервер.</div></div>`
+          : ''}
+
+        <label class="switch">
+          <input type="checkbox" id="rm-server" ${info.serverFolder.exists && !info.serverFolder.protected ? 'checked' : ''}
+                 ${info.serverFolder.exists && !info.serverFolder.protected ? '' : 'disabled'}>
+          <span class="track"></span><span class="switch-text">Удалить папку из каталога сервера
+            <small>${info.serverFolder.protected
+              ? `${esc(info.serverFolder.path)} — ваша собственная папка локального мода, панель её не тронет`
+              : info.serverFolder.exists
+                ? `${esc(info.serverFolder.path)} · ${fmtMb(info.serverFolder.sizeMb)}`
+                : 'папки в каталоге сервера нет'}</small></span>
+        </label>
+
+        ${isLocal
+          ? ''
+          : `<label class="switch">
+              <input type="checkbox" id="rm-workshop" ${info.workshop.exists || info.workshop.inState ? '' : 'disabled'}>
+              <span class="track"></span><span class="switch-text">Удалить файлы из репозитория SteamCMD
+                <small>${info.workshop.exists
+                  ? `${esc(info.workshop.path)} · ${fmtMb(info.workshop.sizeMb)}`
+                  : 'скачанных файлов уже нет'}${info.downloads.exists
+                    ? ` · плюс остатки закачки ${fmtMb(info.downloads.sizeMb)}`
+                    : ''}${info.workshop.inState ? ' · есть запись о версии в appworkshop' : ''}<br>
+                  Мод придётся качать заново, если понадобится снова.</small></span>
+            </label>`}
+
+        <label class="switch">
+          <input type="checkbox" id="rm-keys" ${info.keys.length ? '' : 'disabled'}>
+          <span class="track"></span><span class="switch-text">Удалить ключи .bikey из папки keys
+            <small>${info.keys.length
+              ? `${info.keys.length} шт.: ${info.keys.map(esc).join(', ')}`
+              : 'ключи этого мода определить не удалось'}</small></span>
+        </label>
+
+        ${used.length
+          ? `<label class="switch">
+              <input type="checkbox" id="rm-force">
+              <span class="track"></span><span class="switch-text">Удалять принудительно
+                <small>Игнорировать, что мод нужен другим серверам панели</small></span>
+            </label>`
+          : ''}
+      </div>`;
+
+    goBtn.disabled = false;
+    goBtn.addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const flags = {
+          deleteFiles: m.body.querySelector('#rm-server')?.checked,
+          deleteWorkshop: m.body.querySelector('#rm-workshop')?.checked,
+          deleteKeys: m.body.querySelector('#rm-keys')?.checked,
+          force: m.body.querySelector('#rm-force')?.checked
+        };
+
+        const { report } = await api.deleteMod(mod.id, flags);
+        m.close();
+
+        const freed = report.workshop ? report.workshop.freedBytes : 0;
+        toast(
+          `Мод «${mod.name}» удалён${freed ? `, освобождено ${fmtBytes(freed)}` : ''}`,
+          'ok',
+          freed ? 9000 : undefined
+        );
+        for (const warning of report.warnings || []) toast(warning, 'warn', 12000);
+
+        await refreshMods();
+        await refreshServers();
+      })
+    );
+  })();
 }
 
 /** Длинный путь в строке мода показываем сокращённо, полный — в подсказке. */

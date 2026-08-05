@@ -8,7 +8,7 @@
 
 import { api } from '../api.js';
 import { state, activeServer, refreshConfig, refreshServers, refreshStatus } from '../store.js';
-import { esc, icon, toast, busy } from '../ui.js';
+import { esc, icon, toast, busy, modal } from '../ui.js';
 
 let paneRef = null;
 
@@ -70,12 +70,13 @@ function render(s, cfg) {
           <input type="text" data-p="server.adminPassword" value="${esc(sv.adminPassword)}">
         </div>
         <div class="field">
-          <label>Карта (mission)</label>
-          <select data-p="server.mission">
-            <option value="dayzOffline.chernarusplus" ${sv.mission === 'dayzOffline.chernarusplus' ? 'selected' : ''}>Chernarus+ (Черноруссия)</option>
-            <option value="dayzOffline.enoch" ${sv.mission === 'dayzOffline.enoch' ? 'selected' : ''}>Livonia (Ливония)</option>
-            <option value="dayzOffline.sakhal" ${sv.mission === 'dayzOffline.sakhal' ? 'selected' : ''}>Sakhal (Сахал)</option>
-          </select>
+          <label>Карта (миссия)</label>
+          <div class="row">
+            <input type="text" id="mission-current" value="${esc(sv.mission)}" readonly
+                   title="Имя папки миссии в mpmissions" style="flex:1;min-width:0">
+            <button class="btn" id="mission-pick" type="button">${icon('map')} Выбрать карту</button>
+          </div>
+          <div class="hint" id="mission-hint">Список берётся из папки mpmissions этого сервера</div>
         </div>
         <div class="field">
           <label>Ускорение времени (день / ночь)</label>
@@ -305,6 +306,56 @@ function render(s, cfg) {
 
     <div class="card">
       <div class="card-head">
+        <span class="card-title-icon">${icon('link')}</span>
+        <div><h2>CFTools Cloud</h2>
+          <div class="card-sub">Необязательно. Пока выключено — панель никуда не обращается и работает как обычно</div></div>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" data-g="cftools.enabled" ${cfg.cftools.enabled ? 'checked' : ''}>
+        <span class="track"></span><span class="switch-text">Использовать CFTools Cloud
+          <small>Появится вкладка «CFTools»: игроки онлайн, кик, баны, сообщения в игру и RCon</small></span>
+      </label>
+
+      <div class="notice info mb" style="margin-top:16px"><span class="ic">${icon('info')}</span>
+        <div>Ключи приложения создаются один раз на developer.cftools.cloud (Applications → создать приложение),
+        там же приложению выдаются гранты на конкретный сервер и банлист. Application ID и Secret общие для всей
+        панели, а Server API ID — свой у каждого сервера.</div></div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Application ID</label>
+          <input type="text" data-g="cftools.applicationId" value="${esc(cfg.cftools.applicationId)}" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Secret ${cfg.cftools.hasSecret ? '<span class="badge ok">сохранён</span>' : ''}</label>
+          <input type="password" data-g="cftools.secret" value="" autocomplete="new-password"
+                 placeholder="пусто — не менять">
+        </div>
+        <div class="field">
+          <label>Server API ID <span class="badge">этого сервера</span></label>
+          <input type="text" data-p="cftools.serverApiId" value="${esc((s.cftools || {}).serverApiId || '')}"
+                 autocomplete="off">
+          <div class="hint">CFTools Cloud → нужный сервер → Settings → API</div>
+        </div>
+        <div class="field">
+          <label>Banlist ID <span class="badge">для банов</span></label>
+          <input type="text" data-p="cftools.banlistId" value="${esc((s.cftools || {}).banlistId || '')}"
+                 autocomplete="off">
+          <div class="hint">Без него вкладка CFTools покажет всё, кроме списка банов</div>
+        </div>
+      </div>
+
+      <div class="row wrap" style="margin-top:16px">
+        <button class="btn" id="cf-test" type="button">${icon('zap')} Проверить связь</button>
+        <button class="btn" id="cf-grants" type="button">${icon('search')} Мои ресурсы в CFTools</button>
+        <span class="small faint" id="cf-status"></span>
+      </div>
+      <div class="hint" style="margin-top:8px">Ключи проверяются теми, что уже сохранены — сначала «Сохранить настройки».</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <span class="card-title-icon">${icon('settings')}</span>
         <div><h2>Панель</h2><div class="card-sub">Изменения адреса и порта применяются после перезапуска панели</div></div>
       </div>
@@ -348,6 +399,29 @@ function bind(server) {
   };
   modeSelect.addEventListener('change', syncMode);
   syncMode();
+
+  paneRef.querySelector('#mission-pick').addEventListener('click', () => openMissionPicker());
+
+  paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const result = await api.cfTest();
+      const label = result.server
+        ? `«${result.server.nickname || result.serverApiId}»` +
+          (result.playersOnline === null ? '' : `, игроков онлайн: ${result.playersOnline}`)
+        : `доступно серверов: ${result.servers.length}`;
+
+      paneRef.querySelector('#cf-status').textContent = `связь есть — ${label}`;
+      toast(`CFTools отвечает: ${label}`, 'ok', 9000);
+      for (const warning of result.warnings || []) toast(warning, 'warn', 12000);
+    })
+  );
+
+  paneRef.querySelector('#cf-grants').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const { servers, banlists } = await api.cfGrants();
+      openGrantsModal(servers, banlists);
+    })
+  );
 
   paneRef.querySelector('#set-save').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
@@ -411,6 +485,190 @@ function bind(server) {
       await load();
     })
   );
+}
+
+/* ------------------------------------------------- ресурсы CFTools */
+
+/**
+ * Список серверов и банлистов, к которым у приложения есть доступ.
+ * Клик по строке подставляет ID в соответствующее поле — руками ID
+ * длиной в 24 символа переписывать неудобно и легко ошибиться.
+ */
+function openGrantsModal(servers, banlists) {
+  const rows = (items, target, empty) =>
+    items.length
+      ? items
+          .map(
+            (g) => `
+              <div class="mod-row">
+                <div class="mod-thumb ph">${icon(target === 'serverApiId' ? 'server' : 'shield')}</div>
+                <div class="mod-main">
+                  <div class="mod-name">${esc(g.identifier || g.id)}</div>
+                  <div class="mod-meta"><span>${esc(g.id)}</span></div>
+                </div>
+                <div class="mod-actions">
+                  <button class="btn btn-sm btn-primary" data-fill="${esc(target)}" data-value="${esc(g.id)}">
+                    Подставить</button>
+                </div>
+              </div>`
+          )
+          .join('')
+      : `<div class="notice warn"><span class="ic">${icon('alert')}</span><div>${empty}</div></div>`;
+
+  const m = modal({
+    title: 'Ресурсы приложения в CFTools',
+    subtitle: 'То, к чему приложению выданы гранты',
+    icon: 'link',
+    wide: true,
+    body: `
+      <div class="col" style="gap:16px">
+        <div>
+          <div class="card-sub mb">Серверы</div>
+          <div class="mod-list">${rows(servers, 'serverApiId', 'Приложению не выдан доступ ни к одному серверу. Сделайте это на developer.cftools.cloud.')}</div>
+        </div>
+        <div>
+          <div class="card-sub mb">Банлисты</div>
+          <div class="mod-list">${rows(banlists, 'banlistId', 'Доступных банлистов нет — баны будут недоступны.')}</div>
+        </div>
+      </div>`,
+    footer: `<span class="spacer"></span><button class="btn" data-close>Закрыть</button>`
+  });
+
+  m.body.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-fill]');
+    if (!btn) return;
+
+    const input = paneRef.querySelector(`[data-p="cftools.${btn.dataset.fill}"]`);
+    if (input) input.value = btn.dataset.value;
+    m.close();
+    toast('ID подставлен — не забудьте «Сохранить настройки»', 'info', 9000);
+  });
+}
+
+/* ------------------------------------------------------- выбор карты */
+
+/**
+ * Окно выбора карты.
+ *
+ * Карта в DayZ — это миссия из папки mpmissions сервера, поэтому список
+ * читается с диска: у каждого сервера он свой. Выбор применяется сразу
+ * (настройки сервера + serverDZ.cfg) и не ждёт кнопки «Сохранить настройки».
+ */
+export function openMissionPicker() {
+  const m = modal({
+    title: 'Выбрать карту',
+    subtitle: 'Миссии из папки mpmissions этого сервера',
+    icon: 'map',
+    wide: true,
+    body: `<div id="mission-list" class="col" style="gap:10px">
+             <div class="small faint">Читаю mpmissions…</div>
+           </div>`,
+    footer: `
+      <button class="btn btn-sm" id="mission-refresh">${icon('restart')} Перечитать папку</button>
+      <span class="spacer"></span>
+      <button class="btn" data-close>Закрыть</button>`
+  });
+
+  const listEl = m.body.querySelector('#mission-list');
+
+  async function apply(mission, force) {
+    const result = await api.selectMission(mission, force);
+    m.close();
+
+    const field = paneRef && paneRef.querySelector('#mission-current');
+    if (field) field.value = result.mission;
+
+    toast(`Карта: ${result.label}`, 'ok');
+    for (const warning of result.warnings || []) toast(warning, 'warn', 12000);
+    if (result.restartRequired) toast('Новая карта применится после перезапуска сервера', 'warn', 12000);
+
+    await refreshConfig();
+    await refreshServers();
+    await refreshStatus();
+    await load();
+  }
+
+  async function render() {
+    let data;
+    try {
+      data = await api.missions();
+    } catch (err) {
+      listEl.innerHTML = `<div class="notice err"><span class="ic">${icon('alert')}</span><div>${esc(err.message)}</div></div>`;
+      return;
+    }
+
+    const rows = data.missions
+      .map((mi) => {
+        const badges = [
+          mi.current ? '<span class="badge ok">выбрана</span>' : '',
+          mi.vanilla ? '<span class="badge">из игры</span>' : '<span class="badge">мод / своя сборка</span>',
+          mi.exists ? '' : '<span class="badge warn">нет на диске</span>',
+          mi.exists && !mi.hasInit ? '<span class="badge warn">нет init.c</span>' : '',
+          mi.hasStorage ? '<span class="badge">есть сохранённый мир</span>' : ''
+        ]
+          .filter(Boolean)
+          .join(' ');
+
+        return `
+          <div class="mod-row">
+            <div class="mod-thumb ph">${icon('map')}</div>
+            <div class="mod-main">
+              <div class="mod-name">${esc(mi.label)}</div>
+              <div class="mod-meta"><span>${esc(mi.folder)}</span>${badges}</div>
+            </div>
+            <div class="mod-actions">
+              <button class="btn btn-sm ${mi.current ? '' : 'btn-primary'}" data-mission="${esc(mi.folder)}"
+                      ${mi.current ? 'disabled' : ''}>
+                ${mi.current ? 'уже выбрана' : 'Выбрать'}</button>
+            </div>
+          </div>`;
+      })
+      .join('');
+
+    listEl.innerHTML = `
+      ${data.dirExists
+        ? ''
+        : `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+            <div>Папка <span class="inline-code">${esc(data.dir || 'mpmissions')}</span> не найдена — файлы сервера
+            ещё не установлены. Пока показан набор карт из самой игры.</div></div>`}
+      ${data.dirExists && data.fallback
+        ? `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+            <div>В mpmissions нет ни одной миссии. Установите файлы сервера заново или скопируйте
+            миссию в <span class="inline-code">${esc(data.dir)}</span>.</div></div>`
+        : ''}
+      ${data.current && !data.currentExists && data.dirExists
+        ? `<div class="notice err"><span class="ic">${icon('alert')}</span>
+            <div>Выбранная миссия <span class="inline-code">${esc(data.current)}</span> на диске отсутствует —
+            сервер с ней не запустится.</div></div>`
+        : ''}
+      <div class="mod-list">${rows}</div>
+      <div class="field" style="margin-top:6px">
+        <label>Своя миссия <span class="badge">имя папки</span></label>
+        <div class="row">
+          <input type="text" id="mission-manual" placeholder="например, hardcore.chernarusplus" style="flex:1;min-width:0">
+          <button class="btn" id="mission-manual-apply">Применить</button>
+        </div>
+        <div class="hint">Пригодится, когда карта приедет вместе с модом позже: проверка наличия папки
+          будет пропущена.</div>
+      </div>`;
+
+    for (const btn of listEl.querySelectorAll('[data-mission]')) {
+      btn.addEventListener('click', (e) =>
+        busy(e.currentTarget, () => apply(e.currentTarget.dataset.mission, false))
+      );
+    }
+
+    listEl.querySelector('#mission-manual-apply').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const value = listEl.querySelector('#mission-manual').value.trim();
+        if (!value) return toast('Введите имя папки миссии', 'warn');
+        return apply(value, true);
+      })
+    );
+  }
+
+  m.footer.querySelector('#mission-refresh').addEventListener('click', (e) => busy(e.currentTarget, render));
+  render();
 }
 
 function readValue(input) {

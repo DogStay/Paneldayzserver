@@ -393,34 +393,273 @@ function patch(id, changes) {
   return mods.find((m) => m.id === String(id));
 }
 
-function remove(id, { deleteServerFolder = false } = {}) {
+/* ------------------------------------------------------------------ удаление */
+
+/** Откуда мод берётся: папка в репозитории SteamCMD или своя папка на диске. */
+function sourceDirOf(mod, v = config.active()) {
+  const folder = mod.folder || folderNameFor(mod.id, mod.name);
+  const candidates =
+    mod.source === 'local'
+      ? [mod.localPath, path.join(v.paths.serverPath, folder)]
+      : [steamcmd.itemPath(mod.id, v), path.join(v.paths.serverPath, folder)];
+
+  return candidates.find((dir) => dir && fs.existsSync(dir)) || '';
+}
+
+/**
+ * Ключи .bikey, которые попали в <сервер>/keys из этого мода.
+ *
+ * Имена берём из keys/ самого мода: только так можно понять, какие из десятков
+ * файлов в общей папке ключей принадлежат именно ему. Если файлов мода уже нет,
+ * список будет пустым — тогда ключи придётся удалить вручную.
+ */
+function modKeyFiles(mod, v = config.active()) {
+  const source = sourceDirOf(mod, v);
+  const keysDir = source ? findKeysDir(source) : null;
+  if (!keysDir || !v.paths.serverPath) return [];
+
+  const serverKeys = path.join(v.paths.serverPath, 'keys');
+  let names;
+  try {
+    names = fs.readdirSync(keysDir);
+  } catch (_) {
+    return [];
+  }
+
+  return names
+    .filter((file) => /\.bikey$/i.test(file))
+    .filter((file) => fs.existsSync(path.join(serverKeys, file)));
+}
+
+/**
+ * Другие серверы панели, которые пользуются тем же workshop-модом.
+ *
+ * Репозиторий SteamCMD один на всю панель, поэтому файлы мода общие: удалив их
+ * ради одного сервера, можно сломать остальные.
+ */
+function otherServersUsing(modId, exceptServerId) {
+  return config
+    .servers()
+    .filter((s) => s.id !== exceptServerId)
+    .filter((s) => s.mods.some((m) => m.id === String(modId) && m.source !== 'local'))
+    .map((s) => ({ id: s.id, name: s.name }));
+}
+
+/**
+ * Что именно будет удалено — для диалога подтверждения в интерфейсе.
+ * Ничего не меняет, только считает.
+ */
+function removalInfo(id) {
   const v = config.active();
   const mod = v.mods.find((m) => m.id === String(id));
   if (!mod) throw new Error(`Мод ${id} не найден в списке`);
 
-  saveMods(v.mods.filter((m) => m.id !== String(id)));
+  const folder = mod.folder || folderNameFor(mod.id, mod.name);
+  const target = path.join(v.paths.serverPath, folder);
+  const isOwnFolder =
+    mod.source === 'local' && mod.localPath && path.resolve(mod.localPath) === path.resolve(target);
 
-  if (deleteServerFolder && mod.folder) {
-    const target = path.join(v.paths.serverPath, mod.folder);
-    const isOwnFolder =
-      mod.source === 'local' && mod.localPath && path.resolve(mod.localPath) === path.resolve(target);
+  const workshopPath = mod.source === 'local' ? '' : steamcmd.itemPath(mod.id, v);
+  const downloadsPath = mod.source === 'local' ? '' : steamcmd.downloadDir(mod.id, v);
 
+  return {
+    id: mod.id,
+    name: mod.name,
+    folder,
+    source: mod.source,
+    serverFolder: {
+      path: target,
+      exists: fs.existsSync(target),
+      // Исходную папку локального мода панель не удаляет никогда.
+      protected: Boolean(isOwnFolder),
+      sizeMb: fs.existsSync(target) ? dirSizeMb(target) : 0
+    },
+    workshop: {
+      path: workshopPath,
+      exists: Boolean(workshopPath) && fs.existsSync(workshopPath),
+      sizeMb: workshopPath && fs.existsSync(workshopPath) ? dirSizeMb(workshopPath) : 0,
+      inState: Boolean(steamcmd.readInstalledState(v)[mod.id])
+    },
+    downloads: {
+      path: downloadsPath,
+      exists: Boolean(downloadsPath) && fs.existsSync(downloadsPath),
+      sizeMb: downloadsPath && fs.existsSync(downloadsPath) ? dirSizeMb(downloadsPath) : 0
+    },
+    localPath: mod.source === 'local' ? mod.localPath : '',
+    keys: modKeyFiles(mod, v),
+    usedByOtherServers: mod.source === 'local' ? [] : otherServersUsing(mod.id, v.id),
+    serverRunning: serverIsRunning(v),
+    steamcmdBusy: steamcmd.isBusy()
+  };
+}
+
+/**
+ * Удалить мод.
+ *
+ * Три уровня, которые выбираются независимо:
+ *   - убрать из списка панели (всегда);
+ *   - удалить папку @Мод из каталога сервера (deleteServerFolder);
+ *   - удалить скачанные файлы из репозитория SteamCMD вместе с записью о
+ *     версии в appworkshop_<appid>.acf (deleteWorkshop) — после этого мод
+ *     придётся качать заново.
+ *
+ * @param {string} id
+ * @param {{deleteServerFolder?: boolean, deleteWorkshop?: boolean,
+ *          deleteKeys?: boolean, force?: boolean}} [opts]
+ */
+function remove(id, opts = {}) {
+  const {
+    deleteServerFolder = false,
+    deleteWorkshop = false,
+    deleteKeys = false,
+    force = false
+  } = opts;
+
+  const v = config.active();
+  const mod = v.mods.find((m) => m.id === String(id));
+  if (!mod) throw new Error(`Мод ${id} не найден в списке`);
+
+  const folder = mod.folder || folderNameFor(mod.id, mod.name);
+  const target = path.join(v.paths.serverPath, folder);
+  const isOwnFolder =
+    mod.source === 'local' && mod.localPath && path.resolve(mod.localPath) === path.resolve(target);
+
+  const report = { mod, serverFolder: null, workshop: null, keys: null, warnings: [] };
+
+  /* --- проверки до того, как что-то удалено --- */
+
+  if (deleteServerFolder && !isOwnFolder && fs.existsSync(target) && serverIsRunning(v)) {
+    throw new Error(`${folder}: ${SERVER_BUSY_HINT}`);
+  }
+
+  const purgeWorkshop = deleteWorkshop && mod.source !== 'local';
+  if (deleteWorkshop && mod.source === 'local') {
+    report.warnings.push('Локальный мод не качался через SteamCMD — в репозитории удалять нечего.');
+  }
+
+  if (purgeWorkshop) {
+    if (steamcmd.isBusy()) {
+      throw new Error(
+        'SteamCMD сейчас работает. Дождитесь окончания загрузки — иначе удалённые файлы могут вернуться.'
+      );
+    }
+    const usedBy = otherServersUsing(mod.id, v.id);
+    if (usedBy.length && !force) {
+      throw new Error(
+        `Мод «${mod.name}» используют другие серверы панели: ${usedBy.map((s) => s.name).join(', ')}. ` +
+          'Файлы в репозитории SteamCMD общие — удаление сломает их. Уберите мод там или подтвердите удаление принудительно.'
+      );
+    }
+    if (usedBy.length) {
+      report.warnings.push(
+        `Файлы удалены, хотя мод используют: ${usedBy.map((s) => s.name).join(', ')}. ` +
+          'Для этих серверов мод придётся скачать заново.'
+      );
+    }
+  }
+
+  // Имена ключей нужно узнать до удаления папок — потом источник исчезнет.
+  const keyFiles = deleteKeys ? modKeyFiles(mod, v) : [];
+
+  /* --- удаление --- */
+
+  if (deleteKeys) {
+    const serverKeys = path.join(v.paths.serverPath, 'keys');
+    const removed = [];
+    for (const file of keyFiles) {
+      try {
+        fs.rmSync(path.join(serverKeys, file), { force: true });
+        removed.push(file);
+      } catch (err) {
+        report.warnings.push(`Ключ ${file} не удалён: ${err.message}`);
+      }
+    }
+    report.keys = { removed, dir: serverKeys };
+    if (removed.length) logger.info(SOURCE, `Удалены ключи мода «${mod.name}»: ${removed.join(', ')}`);
+    else if (!keyFiles.length) {
+      report.warnings.push('Ключи .bikey этого мода определить не удалось — проверьте папку keys вручную.');
+    }
+  }
+
+  if (deleteServerFolder) {
     if (isOwnFolder) {
       // Это исходная папка пользователя, а не копия, сделанная панелью.
       // Удалять её нельзя — панель лишь забывает про мод.
       logger.info(SOURCE, `Папка локального мода оставлена на диске: ${target}`);
+      report.serverFolder = { path: target, removed: false, protectedPath: true };
     } else {
       try {
         removeIfExists(target);
         logger.info(SOURCE, `Удалена папка мода: ${target}`);
+        report.serverFolder = { path: target, removed: true };
       } catch (err) {
         logger.warn(SOURCE, `Не удалось удалить ${target}: ${err.message}`);
+        report.serverFolder = { path: target, removed: false, error: err.message };
+        report.warnings.push(`Папка ${folder} не удалена: ${err.message}`);
       }
     }
   }
 
-  logger.info(SOURCE, `Мод удалён из списка: ${mod.name} (${mod.id})`);
-  return mod;
+  if (purgeWorkshop) {
+    try {
+      const files = steamcmd.removeItemFiles(mod.id, v);
+      const state = steamcmd.forgetInstalled(mod.id, v);
+      report.workshop = { ...files, state };
+
+      if (!files.contentRemoved && !files.downloadsRemoved) {
+        report.warnings.push('В репозитории SteamCMD файлов этого мода уже не было.');
+      }
+      if (!state.changed && state.reason) report.warnings.push(`Файл состояния SteamCMD: ${state.reason}`);
+    } catch (err) {
+      logger.error(SOURCE, `Не удалось удалить файлы мода ${mod.id} из репозитория: ${err.message}`);
+      report.warnings.push(`Репозиторий SteamCMD: ${err.message}`);
+    }
+  }
+
+  // Запись из списка убираем последней: если удаление файлов упало, мод всё
+  // ещё виден в панели и операцию можно повторить.
+  saveMods(v.mods.filter((m) => m.id !== String(id)));
+
+  logger.info(
+    SOURCE,
+    `Мод удалён из списка: ${mod.name} (${mod.id})` +
+      (report.workshop ? ', включая файлы в репозитории SteamCMD' : '')
+  );
+  return report;
+}
+
+/**
+ * Удалить из репозитория SteamCMD мод, которого нет ни в одном списке панели
+ * («бесхозный» скачанный мод) — освобождает место на диске.
+ *
+ * @param {string} id
+ * @param {{force?: boolean}} [opts]
+ */
+function removeWorkshopItem(id, opts = {}) {
+  const v = config.active();
+  const workshopId = String(id).trim();
+  if (!/^\d+$/.test(workshopId)) throw new Error(`Некорректный Workshop ID: ${id}`);
+
+  if (steamcmd.isBusy()) {
+    throw new Error('SteamCMD сейчас работает. Дождитесь окончания загрузки и повторите.');
+  }
+
+  const usedBy = config
+    .servers()
+    .filter((s) => s.mods.some((m) => m.id === workshopId && m.source !== 'local'))
+    .map((s) => ({ id: s.id, name: s.name }));
+
+  if (usedBy.length && !opts.force) {
+    throw new Error(
+      `Мод ${workshopId} подключён к серверам: ${usedBy.map((s) => s.name).join(', ')}. ` +
+        'Удалите его в списке модов этих серверов.'
+    );
+  }
+
+  const files = steamcmd.removeItemFiles(workshopId, v);
+  const state = steamcmd.forgetInstalled(workshopId, v);
+
+  return { id: workshopId, ...files, state, usedBy };
 }
 
 function setEnabled(id, enabled) {
@@ -937,6 +1176,8 @@ module.exports = {
   addByWorkshopId,
   adoptExisting,
   remove,
+  removalInfo,
+  removeWorkshopItem,
   setEnabled,
   patch,
   reorder,
