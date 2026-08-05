@@ -103,4 +103,34 @@ const encode = (text) => encodeDetailed(text).buffer;
 /** Можно ли записать строку в CP866 без потерь (например, имя папки мода). */
 const canEncode = (text) => !encodeDetailed(text).lossy;
 
-module.exports = { encode, encodeDetailed, canEncode };
+/* ------------------------------------------------------------- обратно */
+
+/** Таблица для чтения: байт -> символ. Строится один раз из правил кодирования. */
+const DECODE_TABLE = (() => {
+  const table = new Array(256);
+  for (let i = 0; i < 128; i++) table[i] = String.fromCharCode(i);
+
+  for (let i = 0; i < 32; i++) table[0x80 + i] = String.fromCharCode(0x410 + i); // А..Я
+  for (let i = 0; i < 16; i++) table[0xa0 + i] = String.fromCharCode(0x430 + i); // а..п
+  for (let i = 0; i < 16; i++) table[0xe0 + i] = String.fromCharCode(0x440 + i); // р..я
+  table[0xf0] = 'Ё';
+  table[0xf1] = 'ё';
+
+  for (const [char, code] of Object.entries(DIRECT)) table[code] = char;
+
+  for (let i = 0; i < 256; i++) if (table[i] === undefined) table[i] = ' ';
+  return table;
+})();
+
+/**
+ * Прочитать буфер как CP866. Нужно там, где панель показывает содержимое
+ * собственных .bat — например в диагностическом отчёте.
+ */
+function decode(buffer) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  let out = '';
+  for (const byte of bytes) out += DECODE_TABLE[byte];
+  return out;
+}
+
+module.exports = { encode, encodeDetailed, canEncode, decode };

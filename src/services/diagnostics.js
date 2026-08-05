@@ -25,6 +25,7 @@ const steamcmd = require('./steamcmd');
 const batgen = require('./batgen');
 const mods = require('./mods');
 const logTail = require('./logTail');
+const cp866 = require('../util/cp866');
 
 const SOURCE = 'panel';
 const ROOT = path.join(__dirname, '..', '..');
@@ -57,7 +58,10 @@ function formatBytes(bytes) {
 
 function tailFile(file, lines = 200, { redact = false } = {}) {
   try {
-    const text = fs.readFileSync(file, 'utf8');
+    // Свои .bat панель пишет в CP866 — читать их как UTF-8 значит показать
+    // пользователю крякозябры вместо текста.
+    const raw = fs.readFileSync(file);
+    const text = /\.bat$/i.test(file) ? cp866.decode(raw) : raw.toString('utf8');
     const all = text.split(/\r?\n/);
     const tail = all.slice(-lines).join('\n');
     return redact ? redactSecrets(tail) : tail;
@@ -332,11 +336,24 @@ function writeCrashReport(info) {
       `Сервер:  ${name} (${info.serverId})`,
       `Время:   ${new Date().toLocaleString('ru-RU')}`,
       `Причина: ${info.reason}`,
-      '',
-      'Что делать: приложите этот файл к вопросу о проблеме — в нём есть',
-      'настройки, пути, список модов и последние строки логов.',
       ''
     ];
+
+    if (info.issues && info.issues.length) {
+      parts.push(line('═'));
+      parts.push('  ВЕРОЯТНАЯ ПРИЧИНА');
+      parts.push(line('═'));
+      for (const issue of info.issues) {
+        parts.push('');
+        parts.push(`* ${issue.title}`);
+        for (const text of issue.detail.split('\n')) parts.push(`  ${text}`);
+      }
+      parts.push('');
+    }
+
+    parts.push('Что делать: приложите этот файл к вопросу о проблеме — в нём есть');
+    parts.push('настройки, пути, список модов и последние строки логов.');
+    parts.push('');
 
     if (server) {
       try {

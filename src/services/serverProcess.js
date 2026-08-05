@@ -32,6 +32,7 @@ const mods = require('./mods');
 const serverCfg = require('./serverCfg');
 const logTail = require('./logTail');
 const diagnostics = require('./diagnostics');
+const modIssues = require('./modIssues');
 
 const SOURCE = 'server';
 const RECENT_LINES = 250;
@@ -51,8 +52,10 @@ function instance(serverId) {
       lastError: null,
       lastCrashReport: null,
       lastStartSummary: null,
+      lastIssues: [],
       child: null,
       tailer: null,
+      collector: null,
       recent: []
     });
   }
@@ -81,6 +84,7 @@ function getStatus(serverId) {
     lastError: inst.lastError,
     lastCrashReport: inst.lastCrashReport,
     lastStartSummary: inst.lastStartSummary,
+    lastIssues: inst.lastIssues,
     uptimeSec: inst.startedAt && inst.status === 'running' ? Math.floor((Date.now() - inst.startedAt) / 1000) : 0
   };
 }
@@ -148,8 +152,9 @@ async function start(serverId, opts = {}) {
 
   const progress = (percent, step) => opts.onProgress && opts.onProgress({ percent, step });
 
-  setStatus(inst, 'preparing', { lastError: null, exitCode: null, lastCrashReport: null });
+  setStatus(inst, 'preparing', { lastError: null, exitCode: null, lastCrashReport: null, lastIssues: [] });
   inst.recent = [];
+  inst.collector = modIssues.createCollector();
   logger.info(SOURCE, '─'.repeat(60), { serverId });
   logger.info(SOURCE, `Запуск сервера «${v.server.name}»`, { serverId });
 
@@ -247,6 +252,7 @@ function spawnServer(serverId, v) {
     const onOutput = (chunk, level) => {
       const text = chunk.toString('utf8');
       remember(inst, text.trim());
+      if (inst.collector) for (const line of text.split(/\r?\n/)) inst.collector.feed(line);
       logger.log(SOURCE, text, level, { serverId });
     };
     proc.stdout.on('data', (c) => onOutput(c, 'info'));
@@ -285,15 +291,33 @@ function spawnServer(serverId, v) {
         serverId
       });
 
+      // Движок DayZ ругается на своём языке — переводим в понятные выводы.
+      let issues = [];
+      try {
+        const v = config.active(serverId);
+        issues = modIssues.summarize(inst.collector ? inst.collector.list() : [], v.mods);
+      } catch (_) {
+        /* конфиг мог поменяться — разбор не критичен */
+      }
+      inst.lastIssues = issues;
+
+      for (const issue of issues) {
+        logger.error(SOURCE, `Вероятная причина: ${issue.title}`, { serverId });
+        for (const line of issue.detail.split('\n')) logger.warn(SOURCE, `  ${line}`, { serverId });
+      }
+
       const report = diagnostics.writeCrashReport({
         serverId,
         reason: `Сервер завершился сам: ${reason}, аптайм ${Math.round(ranFor / 1000)} с`,
         status: getStatus(serverId),
-        recent: inst.recent
+        recent: inst.recent,
+        issues
       });
       if (report) {
         inst.lastCrashReport = report;
-        inst.lastError = `Сервер неожиданно завершился (${reason}). Отчёт: ${path.basename(report)}`;
+        inst.lastError = issues.length
+          ? issues[0].title
+          : `Сервер неожиданно завершился (${reason}). Отчёт: ${path.basename(report)}`;
         logger.warn(SOURCE, `Подробный отчёт для диагностики: ${report}`, { serverId });
         bus.emit('status', getStatus(serverId));
       }
@@ -303,7 +327,12 @@ function spawnServer(serverId, v) {
     setStatus(inst, 'running', { pid: proc.pid, startedAt, stoppedAt: null, exitCode: null });
     logger.info(SOURCE, `Сервер запущен, PID ${proc.pid}`, { serverId });
 
-    inst.tailer = logTail.createTailer(serverId, { onLine: (line) => remember(inst, line) });
+    inst.tailer = logTail.createTailer(serverId, {
+      onLine: (line) => {
+        remember(inst, line);
+        if (inst.collector) inst.collector.feed(line);
+      }
+    });
     inst.tailer.start(startedAt);
 
     settled = true;

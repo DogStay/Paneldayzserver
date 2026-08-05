@@ -187,6 +187,19 @@ function renderOverview() {
       <div class="notice warn mb"><span class="ic">${icon('alert')}</span>
         <div><b>Сервер не готов к запуску</b><br>${problems.map(esc).join('<br>')}</div></div>` : ''}
 
+    ${(status.lastIssues || []).map((issue, i) => `
+      <div class="notice err mb">
+        <span class="ic">${icon('alert')}</span>
+        <div>
+          <b>Вероятная причина остановки: ${esc(issue.title)}</b><br>
+          ${esc(issue.detail).replace(/\n/g, '<br>')}
+          ${issue.action && issue.action.type === 'add-mod'
+            ? `<button class="btn btn-sm btn-success mt" data-fix="${i}">
+                 ${icon('download')} Добавить «${esc(issue.action.name)}» и поставить первым</button>`
+            : ''}
+        </div>
+      </div>`).join('')}
+
     ${status.lastCrashReport ? `
       <div class="notice err mb"><span class="ic">${icon('bug')}</span>
         <div><b>Последний запуск завершился сбоем</b><br>
@@ -348,6 +361,39 @@ function bindOverviewActions(server) {
 
   const diagBtn = document.getElementById('ov-open-diag');
   if (diagBtn) diagBtn.addEventListener('click', () => showTab('diag'));
+
+  // Кнопки «починить»: добавляют недостающий мод-фреймворк и поднимают его наверх.
+  const status = activeStatus();
+  for (const node of document.querySelectorAll('[data-fix]')) {
+    const issue = (status.lastIssues || [])[Number(node.dataset.fix)];
+    if (!issue || !issue.action || issue.action.type !== 'add-mod') continue;
+
+    node.addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const { job } = await api.downloadMods([
+          { id: issue.action.workshopId, name: issue.action.name, type: 'client' }
+        ]);
+        toast(`Скачиваю «${issue.action.name}»…`, 'info');
+
+        await awaitJob(job.id).catch((err) => {
+          toast(`Не удалось скачать: ${err.message}`, 'err', 14000);
+          throw err;
+        });
+
+        // Фреймворк обязан грузиться раньше зависимых модов.
+        const list = await api.mods();
+        const ids = list.mods.map((m) => m.id);
+        const target = issue.action.workshopId;
+        if (ids.includes(target)) {
+          await api.reorderMods([target, ...ids.filter((id) => id !== target)]);
+        }
+
+        toast(`«${issue.action.name}» добавлен и поставлен первым. Запустите сервер заново.`, 'ok', 12000);
+        await refreshStatus();
+        await refreshServers();
+      })
+    );
+  }
 }
 
 const shortPath = (value) => String(value || '').split(/[\\/]/).pop();

@@ -6,6 +6,12 @@
  * Один и тот же список аргументов используется и для .bat, и для прямого
  * запуска DayZServer_x64.exe из панели — так поведение кнопки «Старт» и
  * ручного запуска .bat всегда совпадает.
+ *
+ * Текст внутри .bat намеренно на латинице. Файл пересоздаётся при каждом
+ * запуске, его читают и cmd.exe, и текстовые редакторы, а у них разные
+ * представления о кодировке: консоль ждёт CP866, редакторы — UTF-8 или
+ * CP1251. ASCII одинаково правильно выглядит везде, поэтому русский текст
+ * живёт в панели, а не в машинном файле.
  */
 
 const fs = require('fs');
@@ -45,7 +51,28 @@ function buildArgs(cfg = config.active()) {
 
 /** Аргумент в виде, пригодном для вставки в .bat (кавычки там, где нужно). */
 function quoteArg(arg) {
-  return /[\s;&^]/.test(arg) ? `"${arg}"` : arg;
+  // Кавычим всё, что cmd.exe может истолковать по-своему: пробелы, разделители
+  // команд, конвейеры, перенаправления, скобки. Имя мода вида
+  // «The First Line | GUNS» без кавычек превратилось бы в конвейер.
+  return /[\s;&^|<>()!,]/.test(arg) ? `"${arg}"` : arg;
+}
+
+/**
+ * Текст для echo: cmd разбирает служебные символы даже внутри echo,
+ * поэтому экранируем их «крышкой», а проценты удваиваем.
+ */
+function safeEcho(text) {
+  return String(text)
+    .replace(/%/g, '%%')
+    .replace(/[&|<>^()]/g, (ch) => `^${ch}`);
+}
+
+/**
+ * Текст для rem: перенаправления и конвейеры разбираются до того, как cmd
+ * поймёт, что это комментарий, поэтому опасные символы просто убираем.
+ */
+function safeComment(text) {
+  return String(text).replace(/[&|<>^()%]/g, '-');
 }
 
 function buildCommandLine(cfg = config.active()) {
@@ -60,13 +87,13 @@ function buildBatContent(cfg = config.active()) {
   const lines = [
     '@echo off',
     // Никакого chcp: смена кодовой страницы посреди .bat сбивает разбор
-    // файла в cmd.exe, и скрипт молча обрывается. Файл пишется в CP866.
-    `title DayZ Server - ${cfg.server.name}`,
+    // файла в cmd.exe, и скрипт молча обрывается.
+    `title DayZ Server - ${safeEcho(cfg.server.name)}`,
     'rem ==========================================================',
-    'rem  Файл сгенерирован автоматически панелью DayZ Panel',
-    `rem  Дата генерации: ${stamp}`,
-    'rem  Ручные правки будут перезаписаны при следующем запуске',
-    'rem  из панели. Меняйте параметры в разделе «Настройки».',
+    'rem  Generated automatically by DayZ Panel.',
+    `rem  Created: ${stamp}`,
+    'rem  Manual edits are overwritten on the next start from the panel.',
+    'rem  Change settings in the panel instead.',
     'rem ==========================================================',
     '',
     `set "SERVER_DIR=${cfg.paths.serverPath}"`,
@@ -76,36 +103,36 @@ function buildBatContent(cfg = config.active()) {
     '',
     'cd /d "%SERVER_DIR%"',
     'if errorlevel 1 (',
-    '    echo [ОШИБКА] Не найдена папка сервера: %SERVER_DIR%',
+    '    echo [ERROR] Server folder not found: %SERVER_DIR%',
     '    pause',
     '    exit /b 1',
     ')',
     'if not exist "%SERVER_EXE%" (',
-    '    echo [ОШИБКА] Не найден %SERVER_EXE% в %SERVER_DIR%',
+    '    echo [ERROR] %SERVER_EXE% not found in %SERVER_DIR%',
     '    pause',
     '    exit /b 1',
     ')',
     '',
-    `echo Сервер:     ${cfg.server.name}`,
-    'echo Игровой порт: %GAME_PORT% (UDP)',
-    'echo Query порт:   %QUERY_PORT%',
-    `echo Модов включено: ${clientMods.length + serverMods.length}`,
+    `echo Server:     ${safeEcho(cfg.server.name)}`,
+    'echo Game port:  %GAME_PORT% (UDP)',
+    'echo Query port: %QUERY_PORT%',
+    `echo Mods enabled: ${clientMods.length + serverMods.length}`,
     ''
   ];
 
   if (clientMods.length) {
-    lines.push('rem Клиентские моды (-mod):');
-    clientMods.forEach((m) => lines.push(`rem   ${m}`));
+    lines.push('rem Client mods (-mod):');
+    clientMods.forEach((m) => lines.push(`rem   ${safeComment(m)}`));
   }
   if (serverMods.length) {
-    lines.push('rem Серверные моды (-serverMod):');
-    serverMods.forEach((m) => lines.push(`rem   ${m}`));
+    lines.push('rem Server mods (-serverMod):');
+    serverMods.forEach((m) => lines.push(`rem   ${safeComment(m)}`));
   }
   if (clientMods.length || serverMods.length) lines.push('');
 
   lines.push(buildCommandLine(cfg));
   lines.push('');
-  lines.push('rem Код возврата сервера остаётся в %ERRORLEVEL%');
+  lines.push('rem Server exit code stays in %ERRORLEVEL%');
   lines.push('exit /b %ERRORLEVEL%');
   lines.push('');
 
