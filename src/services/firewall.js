@@ -16,6 +16,7 @@ const path = require('path');
 
 const config = require('../config');
 const logger = require('../logger');
+const cp866 = require('../util/cp866');
 
 const SOURCE = 'firewall';
 const RULE_PREFIX = 'DayZ Panel - ';
@@ -224,8 +225,8 @@ function generateBat() {
 
   const lines = [
     '@echo off',
-    'chcp 65001 >nul',
     'rem Сгенерировано DayZ Panel. Запускать ОТ ИМЕНИ АДМИНИСТРАТОРА.',
+    'rem Файл в кодировке CP866 — не добавляйте сюда chcp.',
     'net session >nul 2>&1 || (echo Требуются права администратора & pause & exit /b 1)',
     ''
   ];
@@ -253,7 +254,7 @@ function generateBat() {
   const outDir = path.join(__dirname, '..', '..', 'generated');
   fs.mkdirSync(outDir, { recursive: true });
   const target = path.join(outDir, 'open-firewall.bat');
-  fs.writeFileSync(target, lines.join('\r\n'), 'utf8');
+  fs.writeFileSync(target, cp866.encode(lines.join('\r\n')));
   logger.info(SOURCE, `Сохранён ${target}`);
 
   return { path: target, content: lines.join('\r\n') };

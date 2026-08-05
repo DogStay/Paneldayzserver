@@ -13,6 +13,7 @@ const path = require('path');
 
 const config = require('../config');
 const logger = require('../logger');
+const cp866 = require('../util/cp866');
 const mods = require('./mods');
 
 const SOURCE = 'bat';
@@ -58,7 +59,8 @@ function buildBatContent(cfg = config.active()) {
 
   const lines = [
     '@echo off',
-    'chcp 65001 >nul',
+    // Никакого chcp: смена кодовой страницы посреди .bat сбивает разбор
+    // файла в cmd.exe, и скрипт молча обрывается. Файл пишется в CP866.
     `title DayZ Server - ${cfg.server.name}`,
     'rem ==========================================================',
     'rem  Файл сгенерирован автоматически панелью DayZ Panel',
@@ -123,16 +125,31 @@ function generate(cfg = config.active()) {
     throw new Error(`Папка для .bat не найдена: ${dir}`);
   }
 
+  // Имя папки мода может содержать символы, которых нет в CP866. Сам сервер
+  // панель запускает напрямую с юникодными аргументами, а вот .bat такие
+  // имена передать не сможет — честно предупреждаем.
+  const { clientMods, serverMods } = mods.buildModParams(cfg);
+  const unsupported = [...clientMods, ...serverMods].filter((folder) => !cp866.canEncode(folder));
+  if (unsupported.length) {
+    logger.warn(
+      SOURCE,
+      `Имена модов ${unsupported.join(', ')} не записываются в .bat без искажений. ` +
+        'Запускайте сервер кнопкой в панели — там имена передаются без потерь.'
+    );
+  }
+
+  const buffer = cp866.encode(content);
+
   let written = true;
-  if (fs.existsSync(target) && fs.readFileSync(target, 'utf8') === content) {
+  if (fs.existsSync(target) && fs.readFileSync(target).equals(buffer)) {
     written = false;
     logger.info(SOURCE, `.bat уже актуален: ${target}`);
   } else {
-    fs.writeFileSync(target, content, 'utf8');
+    fs.writeFileSync(target, buffer);
     logger.info(SOURCE, `Сгенерирован ${target}`);
   }
 
-  return { path: target, content, written };
+  return { path: target, content, written, unsupported };
 }
 
 /** Предпросмотр для веб-интерфейса — без записи на диск. */

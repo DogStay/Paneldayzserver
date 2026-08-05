@@ -1,28 +1,42 @@
 @echo off
-chcp 65001 >nul
+rem ==========================================================
+rem  Файл в кодировке CP866 (родная для консоли Windows).
+rem  НЕ добавляйте сюда "chcp 65001": смена кодовой страницы
+rem  посреди .bat сбивает разбор файла, и скрипт молча обрывается.
+rem ==========================================================
 title DayZ Panel
 cd /d "%~dp0"
 
 echo ==========================================================
-echo  DayZ Panel - ╨▓╨╡╨▒-╨┐╨░╨╜╨╡╨╗╤М ╤Г╨┐╤А╨░╨▓╨╗╨╡╨╜╨╕╤П ╤Б╨╡╤А╨▓╨╡╤А╨╛╨╝ DayZ
+echo  DayZ Panel - веб-панель управления сервером DayZ
 echo ==========================================================
 echo.
 
+if not exist "package.json" (
+    echo [ОШИБКА] В этой папке нет package.json.
+    echo Запускайте start-panel.bat из папки, куда распакована панель.
+    echo.
+    pause
+    exit /b 1
+)
+
 where node >nul 2>&1
 if errorlevel 1 (
-    echo [╨Ю╨и╨Ш╨С╨Ъ╨Р] Node.js ╨╜╨╡ ╨╜╨░╨╣╨┤╨╡╨╜ ╨▓ PATH.
-    echo ╨г╤Б╤В╨░╨╜╨╛╨▓╨╕╤В╨╡ Node.js LTS ╤Б https://nodejs.org ╨╕ ╨╖╨░╨┐╤Г╤Б╤В╨╕╤В╨╡ ╤Д╨░╨╣╨╗ ╨╖╨░╨╜╨╛╨▓╨╛.
+    echo [ОШИБКА] Node.js не найден в PATH.
+    echo Установите Node.js LTS с https://nodejs.org и запустите файл заново.
     echo.
     pause
     exit /b 1
 )
 
 if not exist "node_modules\express" (
-    echo ╨Я╨╡╤А╨▓╤Л╨╣ ╨╖╨░╨┐╤Г╤Б╨║: ╤Г╤Б╤В╨░╨╜╨░╨▓╨╗╨╕╨▓╨░╤О ╨╖╨░╨▓╨╕╤Б╨╕╨╝╨╛╤Б╤В╨╕ ^(╨╜╤Г╨╢╨╡╨╜ ╨╕╨╜╤В╨╡╤А╨╜╨╡╤В^)...
+    echo Первый запуск: устанавливаю зависимости, нужен интернет...
+    echo.
     call npm install --omit=dev
     if errorlevel 1 (
         echo.
-        echo [╨Ю╨и╨Ш╨С╨Ъ╨Р] npm install ╨╖╨░╨▓╨╡╤А╤И╨╕╨╗╤Б╤П ╤Б ╨╛╤И╨╕╨▒╨║╨╛╨╣.
+        echo [ОШИБКА] npm install завершился с ошибкой. Запустите install.bat.
+        echo.
         pause
         exit /b 1
     )
@@ -31,25 +45,32 @@ if not exist "node_modules\express" (
 
 net session >nul 2>&1
 if errorlevel 1 (
-    echo [╨Т╨Э╨Ш╨Ь╨Р╨Э╨Ш╨Х] ╨Я╨░╨╜╨╡╨╗╤М ╨╖╨░╨┐╤Г╤Й╨╡╨╜╨░ ╨С╨Х╨Ч ╨┐╤А╨░╨▓ ╨░╨┤╨╝╨╕╨╜╨╕╤Б╤В╤А╨░╤В╨╛╤А╨░.
-    echo ╨Р╨▓╤В╨╛╨╝╨░╤В╨╕╤З╨╡╤Б╨║╨╛╨╡ ╨╛╤В╨║╤А╤Л╤В╨╕╨╡ ╨┐╨╛╤А╤В╨╛╨▓ ╤З╨╡╤А╨╡╨╖ netsh ╤А╨░╨▒╨╛╤В╨░╤В╤М ╨╜╨╡ ╨▒╤Г╨┤╨╡╤В.
-    echo ╨Ч╨░╨║╤А╨╛╨╣╤В╨╡ ╨╛╨║╨╜╨╛ ╨╕ ╨╖╨░╨┐╤Г╤Б╤В╨╕╤В╨╡ ╤Н╤В╨╛╤В ╤Д╨░╨╣╨╗ ╤З╨╡╤А╨╡╨╖ ╨Я╨Ъ╨Ь -^> ┬л╨Ч╨░╨┐╤Г╤Б╨║ ╨╛╤В ╨╕╨╝╨╡╨╜╨╕ ╨░╨┤╨╝╨╕╨╜╨╕╤Б╤В╤А╨░╤В╨╛╤А╨░┬╗.
+    echo [ВНИМАНИЕ] Панель запущена БЕЗ прав администратора.
+    echo Автоматическое открытие портов через netsh работать не будет.
+    echo Закройте окно и запустите файл через правую кнопку мыши -
+    echo "Запуск от имени администратора".
     echo.
 )
 
-for /f "tokens=2 delims=:," %%p in ('findstr /c:"\"port\"" config\config.json 2^>nul') do set PANEL_PORT=%%p
-if not defined PANEL_PORT set PANEL_PORT= 8787
-set PANEL_PORT=%PANEL_PORT: =%
+set "PANEL_PORT=8787"
+if exist "config\config.json" (
+    for /f "tokens=2 delims=:," %%p in ('findstr /c:"\"port\"" config\config.json') do (
+        set "PANEL_PORT=%%p"
+        goto :port_done
+    )
+)
+:port_done
+set "PANEL_PORT=%PANEL_PORT: =%"
 
-echo ╨Ю╤В╨║╤А╤Л╨▓╨░╤О http://localhost:%PANEL_PORT% ...
+echo Открываю http://localhost:%PANEL_PORT%
 start "" "http://localhost:%PANEL_PORT%"
 echo.
-echo ╨Я╨░╨╜╨╡╨╗╤М ╤А╨░╨▒╨╛╤В╨░╨╡╤В. ╨Э╨╡ ╨╖╨░╨║╤А╤Л╨▓╨░╨╣╤В╨╡ ╤Н╤В╨╛ ╨╛╨║╨╜╨╛.
-echo ╨Ф╨╗╤П ╨╛╤Б╤В╨░╨╜╨╛╨▓╨║╨╕ ╨╜╨░╨╢╨╝╨╕╤В╨╡ Ctrl+C.
+echo Панель работает. Не закрывайте это окно.
+echo Для остановки нажмите Ctrl+C.
 echo.
 
 node src\server.js
 
 echo.
-echo ╨Я╨░╨╜╨╡╨╗╤М ╨╛╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨░.
+echo Панель остановлена.
 pause
