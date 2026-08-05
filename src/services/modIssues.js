@@ -12,6 +12,9 @@
  * где его взять и что сделать.
  */
 
+const fs = require('fs');
+const path = require('path');
+
 const SOURCE = 'mods';
 
 /**
@@ -88,6 +91,62 @@ function frameworkFor({ required, type }) {
   );
 }
 
+/* ------------------------------------------------ какой мод что даёт */
+
+/**
+ * Указатель «имя аддона -> мод, который его содержит».
+ *
+ * Движок ругается именами аддонов (FOG_Data_Patches), а админ видит папки
+ * (@Forward Operator Gear). Связать одно с другим можно по именам .pbo:
+ * у подавляющего большинства модов DayZ имя файла и есть имя аддона.
+ *
+ * @param {string} serverPath
+ * @param {Array<{folder: string, name: string, enabled: boolean}>} mods
+ * @returns {Map<string, {folder: string, name: string, order: number}>}
+ */
+function indexAddons(serverPath, mods = []) {
+  const index = new Map();
+  if (!serverPath || !fs.existsSync(serverPath)) return index;
+
+  const enabled = mods.filter((m) => m.enabled && m.folder);
+  enabled.forEach((mod, order) => {
+    const dir = ['addons', 'Addons']
+      .map((name) => path.join(serverPath, mod.folder, name))
+      .find((p) => fs.existsSync(p));
+    if (!dir) return;
+
+    let files = [];
+    try {
+      files = fs.readdirSync(dir);
+    } catch (_) {
+      return;
+    }
+
+    for (const file of files) {
+      if (!/\.pbo$/i.test(file)) continue;
+      const addon = file.replace(/\.pbo$/i, '').toLowerCase();
+      if (!index.has(addon)) index.set(addon, { folder: mod.folder, name: mod.name || mod.folder, order });
+    }
+  });
+
+  return index;
+}
+
+/**
+ * Мод, который «почти» содержит нужный аддон — совпадает начало имени
+ * (FOG_Data_Patches -> мод, где лежат другие FOG_*.pbo). Обычно это и есть
+ * тот самый мод, только другой версии.
+ */
+function likelyProvider(required, index) {
+  const prefix = String(required).split(/[_\-.]/)[0].toLowerCase();
+  if (prefix.length < 3) return null;
+
+  for (const [addon, owner] of index) {
+    if (addon.startsWith(`${prefix}_`) || addon === prefix) return owner;
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------------- выводы */
 
 /**
@@ -95,9 +154,10 @@ function frameworkFor({ required, type }) {
  *
  * @param {Array<object>} issues строки, отобранные analyzeLine
  * @param {Array<{folder: string, name: string, id: string, enabled: boolean}>} mods моды сервера
+ * @param {{serverPath?: string}} [opts] путь к серверу — чтобы заглянуть в .pbo
  * @returns {Array<{severity: 'error'|'warn', title: string, detail: string, action?: object}>}
  */
-function summarize(issues, mods = []) {
+function summarize(issues, mods = [], opts = {}) {
   const out = [];
   if (!issues.length) return out;
 
@@ -154,7 +214,54 @@ function summarize(issues, mods = []) {
     }
   }
 
-  // 3. Неизвестный тип без привязки к известному фреймворку
+  // 3. «Addon 'A' requires addon 'B'» вне известных фреймворков.
+  //    Здесь помогает не догадка, а факт: какие .pbo реально лежат в модах.
+  const index = indexAddons(opts.serverPath, mods);
+  const reported = new Set();
+
+  for (const issue of issues) {
+    if (issue.kind !== 'requires' || frameworkFor(issue)) continue;
+    if (reported.has(issue.required.toLowerCase())) continue;
+    reported.add(issue.required.toLowerCase());
+
+    const provider = index.get(String(issue.required).toLowerCase());
+    const dependent = index.get(String(issue.addon).toLowerCase());
+    const who = dependent ? `Мод «${dependent.name}» (${dependent.folder})` : `Аддон ${issue.addon}`;
+
+    // Зависимость есть, но грузится позже — классическая беда порядка модов.
+    if (provider && dependent && provider.order > dependent.order) {
+      out.push({
+        severity: 'error',
+        title: `«${provider.name}» стоит ниже, чем «${dependent.name}»`,
+        detail:
+          `${who} требует аддон ${issue.required}, который лежит в «${provider.name}» (${provider.folder}), ` +
+          'но тот загружается позже.\n' +
+          `Поднимите «${provider.name}» выше «${dependent.name}» в списке модов и запустите сервер заново.`,
+        action: { type: 'move-before', folder: provider.folder, before: dependent.folder }
+      });
+      continue;
+    }
+
+    if (provider) continue; // зависимость на месте и в правильном порядке
+
+    // Зависимости нет ни в одном включённом моде.
+    const guess = likelyProvider(issue.required, index);
+    out.push({
+      severity: 'error',
+      title: `Не хватает аддона ${issue.required}`,
+      detail: guess
+        ? `${who} требует ${issue.required}.pbo, но ни в одной папке включённых модов такого файла нет.\n` +
+          `Похоже, его должен давать мод «${guess.name}» (${guess.folder}) — там лежат остальные ` +
+          `${String(issue.required).split(/[_\-.]/)[0]}_*.pbo. Значит, у вас другая его версия, чем та, ` +
+          'под которую собран зависимый мод: обновите или переустановите его кнопкой ' +
+          '«Обновить принудительно», а если мод обновлялся автором — обновите и зависимый мод.'
+        : `${who} требует ${issue.required}.pbo, но ни в одной папке включённых модов такого файла нет.\n` +
+          'Нужный мод-зависимость не подключён к серверу. Откройте страницу зависимого мода в Workshop ' +
+          '— в разделе Required Items указано, что ещё нужно подписать.'
+    });
+  }
+
+  // 4. Неизвестный тип без привязки к известному фреймворку
   const unknownTypes = issues.filter((i) => i.kind === 'unknown-type' && !frameworkFor(i));
   for (const issue of unknownTypes.slice(0, 3)) {
     out.push({
@@ -166,7 +273,7 @@ function summarize(issues, mods = []) {
     });
   }
 
-  // 4. Осталась только общая ошибка компиляции
+  // 5. Осталась только общая ошибка компиляции
   if (!out.length && issues.some((i) => i.kind === 'compile-failed' || i.kind === 'scripts-failed')) {
     out.push({
       severity: 'error',
@@ -212,4 +319,4 @@ function createCollector({ limit = 60 } = {}) {
   };
 }
 
-module.exports = { analyzeLine, summarize, createCollector, FRAMEWORKS, SOURCE };
+module.exports = { analyzeLine, summarize, createCollector, indexAddons, FRAMEWORKS, SOURCE };

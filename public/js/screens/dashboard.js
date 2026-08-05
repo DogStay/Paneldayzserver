@@ -191,11 +191,15 @@ function renderOverview() {
       <div class="notice err mb">
         <span class="ic">${icon('alert')}</span>
         <div>
-          <b>Вероятная причина остановки: ${esc(issue.title)}</b><br>
+          <b>${status.status === 'running' ? 'Проблема с модами' : 'Вероятная причина остановки'}: ${esc(issue.title)}</b><br>
           ${esc(issue.detail).replace(/\n/g, '<br>')}
           ${issue.action && issue.action.type === 'add-mod'
             ? `<button class="btn btn-sm btn-success mt" data-fix="${i}">
                  ${icon('download')} Добавить «${esc(issue.action.name)}» и поставить первым</button>`
+            : ''}
+          ${issue.action && (issue.action.type === 'move-before' || issue.action.type === 'move-first')
+            ? `<button class="btn btn-sm btn-success mt" data-order="${i}">
+                 ${icon('refresh')} Исправить порядок модов</button>`
             : ''}
         </div>
       </div>`).join('')}
@@ -366,6 +370,31 @@ function bindOverviewActions(server) {
 
   const diagBtn = document.getElementById('ov-open-diag');
   if (diagBtn) diagBtn.addEventListener('click', () => showTab('diag'));
+
+  // Кнопка «Исправить порядок модов»: двигает мод-зависимость выше того,
+  // кто её требует (или в самый верх, если это фреймворк).
+  for (const node of document.querySelectorAll('[data-order]')) {
+    const issue = (activeStatus().lastIssues || [])[Number(node.dataset.order)];
+    if (!issue || !issue.action) continue;
+
+    node.addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const list = await api.mods();
+        const idOf = (folder) => (list.mods.find((m) => m.folder === folder) || {}).id;
+
+        const moved = idOf(issue.action.folder);
+        if (!moved) return toast(`Мод ${issue.action.folder} не найден в списке`, 'err');
+
+        const rest = list.mods.map((m) => m.id).filter((id) => id !== moved);
+        const at = issue.action.before ? rest.indexOf(idOf(issue.action.before)) : 0;
+        rest.splice(at < 0 ? 0 : at, 0, moved);
+
+        await api.reorderMods(rest);
+        toast('Порядок модов исправлен. Перезапустите сервер, чтобы он вступил в силу.', 'ok', 12000);
+        await refreshServers();
+      })
+    );
+  }
 
   // Кнопки «починить»: добавляют недостающий мод-фреймворк и поднимают его наверх.
   const status = activeStatus();

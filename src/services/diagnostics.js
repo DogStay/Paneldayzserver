@@ -175,6 +175,14 @@ function serverSection(server, status) {
     out.push(`  Аптайм:         ${status.uptimeSec ? `${status.uptimeSec} с` : '—'}`);
     out.push(`  Код выхода:     ${status.exitCode === null || status.exitCode === undefined ? '—' : status.exitCode}`);
     out.push(`  Последняя ошибка: ${status.lastError || '—'}`);
+
+    // Выводы панели по логам движка: их видно и когда сервер ещё работает
+    // (на ошибке зависимостей DayZ показывает окно и ждёт нажатия OK).
+    for (const issue of status.lastIssues || []) {
+      out.push('');
+      out.push(`  ПРОБЛЕМА С МОДАМИ: ${issue.title}`);
+      for (const line of String(issue.detail || '').split('\n')) out.push(`    ${line}`);
+    }
   }
 
   out.push('');

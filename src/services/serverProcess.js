@@ -56,6 +56,8 @@ function instance(serverId) {
       child: null,
       tailer: null,
       collector: null,
+      issueTimer: null,
+      warnedDialog: false,
       recent: []
     });
   }
@@ -65,6 +67,65 @@ function instance(serverId) {
 function remember(inst, line) {
   inst.recent.push(line);
   if (inst.recent.length > RECENT_LINES) inst.recent.shift();
+}
+
+/** Разобрать строку сервера и, если это проблема с модами, запомнить её. */
+function feedIssue(serverId, line) {
+  const inst = instance(serverId);
+  if (!inst.collector) return;
+  if (inst.collector.feed(line)) noteIssuesSoon(serverId);
+}
+
+/**
+ * Живой разбор проблем с модами.
+ *
+ * Ждать падения сервера нельзя: на ошибку вида «Addon 'X' requires addon 'Y'»
+ * движок показывает модальное окно и просто стоит, пока кто-нибудь не нажмёт
+ * OK. Снаружи это выглядит как «сервер запущен, но его нет в списке».
+ * Поэтому выводы делаются прямо во время работы и сразу уезжают в интерфейс.
+ */
+function noteIssuesSoon(serverId) {
+  const inst = instance(serverId);
+  if (inst.issueTimer) return; // строки идут пачками — разбираем их разом
+
+  inst.issueTimer = setTimeout(() => {
+    inst.issueTimer = null;
+
+    let issues = [];
+    try {
+      const v = config.active(serverId);
+      issues = modIssues.summarize(inst.collector ? inst.collector.list() : [], v.mods, {
+        serverPath: v.paths.serverPath
+      });
+    } catch (_) {
+      return; // конфиг мог смениться — разбор не критичен
+    }
+
+    const known = new Set((inst.lastIssues || []).map((i) => i.title));
+    const fresh = issues.filter((i) => !known.has(i.title));
+    if (!fresh.length) return;
+
+    inst.lastIssues = issues;
+
+    for (const issue of fresh) {
+      logger.error(SOURCE, `Проблема с модами: ${issue.title}`, { serverId });
+      for (const line of issue.detail.split('\n')) logger.warn(SOURCE, `  ${line}`, { serverId });
+    }
+
+    if (!inst.warnedDialog) {
+      inst.warnedDialog = true;
+      logger.warn(
+        SOURCE,
+        'Если на экране сервера висит окно DayZ с этой ошибкой — нажмите в нём OK: пока окно открыто, ' +
+          'запуск стоит на месте. Чтобы окно больше не появлялось, устраните причину выше.',
+        { serverId }
+      );
+    }
+
+    bus.emit('status', getStatus(serverId));
+  }, 4000);
+
+  if (inst.issueTimer.unref) inst.issueTimer.unref();
 }
 
 function setStatus(inst, status, patch = {}) {
@@ -154,6 +215,7 @@ async function start(serverId, opts = {}) {
 
   setStatus(inst, 'preparing', { lastError: null, exitCode: null, lastCrashReport: null, lastIssues: [] });
   inst.recent = [];
+  inst.warnedDialog = false;
   inst.collector = modIssues.createCollector();
   logger.info(SOURCE, '─'.repeat(60), { serverId });
   logger.info(SOURCE, `Запуск сервера «${v.server.name}»`, { serverId });
@@ -252,7 +314,7 @@ function spawnServer(serverId, v) {
     const onOutput = (chunk, level) => {
       const text = chunk.toString('utf8');
       remember(inst, text.trim());
-      if (inst.collector) for (const line of text.split(/\r?\n/)) inst.collector.feed(line);
+      for (const line of text.split(/\r?\n/)) feedIssue(serverId, line);
       logger.log(SOURCE, text, level, { serverId });
     };
     proc.stdout.on('data', (c) => onOutput(c, 'info'));
@@ -295,7 +357,9 @@ function spawnServer(serverId, v) {
       let issues = [];
       try {
         const v = config.active(serverId);
-        issues = modIssues.summarize(inst.collector ? inst.collector.list() : [], v.mods);
+        issues = modIssues.summarize(inst.collector ? inst.collector.list() : [], v.mods, {
+          serverPath: v.paths.serverPath
+        });
       } catch (_) {
         /* конфиг мог поменяться — разбор не критичен */
       }
@@ -330,7 +394,7 @@ function spawnServer(serverId, v) {
     inst.tailer = logTail.createTailer(serverId, {
       onLine: (line) => {
         remember(inst, line);
-        if (inst.collector) inst.collector.feed(line);
+        feedIssue(serverId, line);
       }
     });
     inst.tailer.start(startedAt);
