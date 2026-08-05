@@ -237,7 +237,11 @@ function modRow(mod) {
   if (isLocal) badges.push(`<span class="badge info">${icon('folder')} локальный</span>`);
   if (!mod.downloaded) badges.push(`<span class="badge err">${isLocal ? 'папка не найдена' : 'не скачан'}</span>`);
   else if (!mod.deployed) badges.push('<span class="badge warn">не разложен</span>');
-  else badges.push(`<span class="badge ok">${icon('check')} готов</span>`);
+  else if (mod.deployComplete === false) {
+    badges.push(
+      `<span class="badge err" title="В папке сервера ${mod.deployedAddons} аддонов вместо ${mod.sourceAddons}: копирование оборвалось. Движок не найдёт файлы мода. Остановите сервер и нажмите «Разложить».">разложен не полностью</span>`
+    );
+  } else badges.push(`<span class="badge ok">${icon('check')} готов</span>`);
   if (mod.updateAvailable) badges.push('<span class="badge warn">есть обновление</span>');
   if (mod.manualInstall) {
     badges.push('<span class="badge violet" title="Мод перенесён панелью из downloads: SteamCMD скачал его целиком, но не установил. Автопроверка обновлений для него выключена, чтобы не качать гигабайты заново.">установлен переносом</span>');

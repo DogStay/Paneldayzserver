@@ -730,22 +730,56 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * ничего и не происходит, и об этом лучше сказать один раз словами.
  */
 function watchCurrent(getItem, v, onProgress) {
+  const startedAt = Date.now();
+  const baseline = new Map(); // id -> размер content на момент начала работы
   let lastKey = '';
   let stalledTicks = 0;
   let stallReported = false;
+  let idleReportedAt = 0;
 
   const timer = setInterval(() => {
     const item = getItem();
     if (!item) return;
 
+    const installed = dirSize(itemPath(item.id, v));
+    if (!baseline.has(item.id)) baseline.set(item.id, installed);
+
     const state = readDownloadingState(item.id, v);
-    const bytes = (state && state.downloaded) || dirSize(downloadDir(item.id, v)) || dirSize(itemPath(item.id, v));
-    const total = (state && state.total) || item.sizeBytes || 0;
-    if (!bytes) return;
-
+    const partial = dirSize(downloadDir(item.id, v));
     const name = item.label || `${item.name} (${item.id})`;
-    const key = `${item.id}:${bytes}`;
 
+    let bytes = 0;
+    let total = item.sizeBytes || 0;
+
+    if (state && state.total > 0) {
+      // Самый честный источник: цифры самого SteamCMD.
+      bytes = state.downloaded;
+      total = state.total;
+    } else if (partial > 0) {
+      bytes = partial;
+    } else if (installed !== baseline.get(item.id)) {
+      // Мод перезаписывается прямо в content — считаем это прогрессом.
+      bytes = installed;
+    }
+
+    // Ничего не скачивается. Раньше здесь показывался размер уже
+    // установленного мода — получалось бодрое «4.8 ГБ из 4.8 ГБ» на моде,
+    // который на самом деле только проверяется. Лучше сказать правду.
+    if (!bytes) {
+      const minutes = Math.round((Date.now() - startedAt) / 60000);
+      if (Date.now() - idleReportedAt >= 5 * 60 * 1000) {
+        idleReportedAt = Date.now();
+        logger.info(
+          SOURCE,
+          `${name}: SteamCMD работает ${minutes} мин, новых данных пока нет — ` +
+            'скорее всего идёт проверка уже скачанных файлов. Для мода на несколько ГБ это нормально.'
+        );
+      }
+      if (onProgress) onProgress({ percent: null, phase: 'Проверка файлов' });
+      return;
+    }
+
+    const key = `${item.id}:${bytes}`;
     if (key === lastKey) {
       stalledTicks++;
       // Полторы минуты без движения при полностью скачанном моде — это тот

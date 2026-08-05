@@ -12,6 +12,7 @@
  */
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 
 const config = require('../config');
@@ -47,6 +48,34 @@ function folderNameFor(id, metaName) {
     .replace(/\s+/g, ' ')
     .trim();
   return safe ? `@${safe}` : `@${id}`;
+}
+
+/* ------------------------------------------------- полнота раскладки */
+
+/**
+ * Сколько .pbo лежит в addons мода. Дешёвая проверка «мод разложен целиком»:
+ * папка сервера может существовать, но содержать один keys/ на 1 МБ — так
+ * бывает, если копирование оборвалось (например, из-за запущенного сервера).
+ * Движок в таком случае молча не находит аддоны и ругается на зависимости.
+ */
+function addonCount(dir) {
+  const addons = ['addons', 'Addons'].map((n) => path.join(dir, n)).find((p) => fs.existsSync(p));
+  if (!addons) return 0;
+  try {
+    return fs.readdirSync(addons).filter((f) => /\.(pbo|ebo)$/i.test(f)).length;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/** Разложен ли мод целиком: папка есть и аддонов в ней не меньше, чем в источнике. */
+function deployState(source, target) {
+  if (!target || !fs.existsSync(target)) return { deployed: false, complete: false, have: 0, need: 0 };
+
+  const need = source && fs.existsSync(source) ? addonCount(source) : 0;
+  const have = addonCount(target);
+
+  return { deployed: true, complete: !need || have >= need, have, need };
 }
 
 /* --------------------------------------------------------------- сканирование */
@@ -97,6 +126,7 @@ function list() {
     const ws = workshop.get(mod.id);
     const state = installedState[mod.id] || {};
     const folder = mod.folder || folderNameFor(mod.id, ws ? ws.metaName : mod.name);
+    const deploy = deployState(ws ? ws.path : '', path.join(v.paths.serverPath, folder));
 
     return {
       ...mod,
@@ -104,6 +134,9 @@ function list() {
       folder,
       downloaded: Boolean(ws),
       deployed: serverFolders.has(folder),
+      deployComplete: deploy.complete,
+      deployedAddons: deploy.have,
+      sourceAddons: deploy.need,
       sizeMb: ws ? ws.sizeMb : Math.round((mod.sizeBytes / 1024 / 1024) * 10) / 10,
       hasKeys: ws ? ws.hasKeys : false,
       workshopPath: ws ? ws.path : '',
@@ -225,7 +258,7 @@ async function withServerStopped(opts, fn) {
   logger.warn(SOURCE, 'Останавливаю сервер, чтобы заменить файлы модов…');
   await serverProcess.stop(serverId).catch((err) => logger.warn(SOURCE, `Остановка: ${err.message}`));
   // Windows отпускает файловые дескрипторы не мгновенно после смерти процесса.
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await new Promise((resolve) => setTimeout(resolve, 5000));
 
   try {
     return await fn();
@@ -602,13 +635,26 @@ async function deploy(mod, opts = {}) {
   if (symlink && isLinkTo(target, source) && !opts.force) {
     logger.info(SOURCE, `${folder}: симлинк уже актуален`);
   } else {
-    removeIfExists(target);
+    await removeIfExistsAsync(target);
     if (symlink) {
       fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
       logger.info(SOURCE, `${folder}: создан симлинк -> ${source}`);
     } else {
-      fs.cpSync(source, target, { recursive: true, force: true });
-      logger.info(SOURCE, `${folder}: скопировано в папку сервера`);
+      // Асинхронно: мод на 5 ГБ копируется минутами, и синхронная копия
+      // всё это время держала бы панель (и её лог) замороженной.
+      await fsp.cp(source, target, { recursive: true, force: true });
+
+      // Копирование могло оборваться на середине — например, если сервер
+      // держал часть файлов. Молча оставлять половину мода нельзя: движок
+      // просто не найдёт аддоны и будет ругаться на зависимости.
+      const check = deployState(source, target);
+      if (!check.complete) {
+        throw new Error(
+          `${folder}: скопировано ${check.have} аддонов из ${check.need} — папка мода получилась неполной. ` +
+            'Остановите сервер (и закройте проводник в этой папке) и разложите моды заново.'
+        );
+      }
+      logger.info(SOURCE, `${folder}: скопировано в папку сервера (аддонов: ${check.have})`);
     }
   }
 
@@ -640,6 +686,31 @@ function isLinkTo(target, source) {
     return path.resolve(fs.readlinkSync(target)) === path.resolve(source);
   } catch (_) {
     return false;
+  }
+}
+
+/**
+ * То же, что removeIfExists, но не блокирует панель на больших папках
+ * и терпит Windows: после остановки сервера файловые дескрипторы освобождаются
+ * не мгновенно, и первая попытка удаления может упасть с EPERM/EBUSY.
+ */
+async function removeIfExistsAsync(target, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const stat = await fsp.lstat(target);
+      if (stat.isSymbolicLink()) await fsp.unlink(target);
+      else await fsp.rm(target, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (err.code === 'ENOENT') return;
+      if (attempt >= attempts || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+
+      logger.warn(
+        SOURCE,
+        `${path.basename(target)}: файлы ещё заняты (${err.code}), жду и пробую снова (${attempt} из ${attempts - 1})`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
   }
 }
 
@@ -769,6 +840,24 @@ async function checkAndUpdate(opts = {}) {
     const label = result.status === 'installed' ? 'установлен' : 'ОБНОВЛЁН';
     logger.info(SOURCE, `↑ ${mod.name} (${mod.id}): ${label} (manifest ${result.manifest || 'n/a'})`);
     updated.push({ id: mod.id, name: mod.name, status: result.status, manifest: result.manifest });
+    toDeploy.push(mod);
+  }
+
+  // Мод может быть «актуален» по версии, но лежать в папке сервера огрызком:
+  // копирование когда-то оборвалось. Движок в этом случае аддонов не найдёт,
+  // поэтому такие моды перекладываем заново, не дожидаясь обновления.
+  for (const mod of enabled) {
+    if (toDeploy.includes(mod)) continue;
+    const folder = mod.folder || folderNameFor(mod.id, mod.name);
+    const st = deployState(steamcmd.itemPath(mod.id, v), path.join(v.paths.serverPath, folder));
+    if (st.deployed && st.complete) continue;
+
+    logger.warn(
+      SOURCE,
+      st.deployed
+        ? `${mod.name}: в папке сервера ${st.have} аддонов вместо ${st.need} — мод разложен не полностью, раскладываю заново`
+        : `${mod.name}: папки ${folder} нет в каталоге сервера — раскладываю`
+    );
     toDeploy.push(mod);
   }
 
