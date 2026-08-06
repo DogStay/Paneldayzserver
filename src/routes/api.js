@@ -31,6 +31,8 @@ const scheduler = require('../services/scheduler');
 const announcer = require('../services/announcer');
 const ingame = require('../services/ingame');
 const battleye = require('../services/battleye');
+const bridge = require('../services/bridge');
+const eventlog = require('../services/eventlog');
 
 const router = express.Router();
 
@@ -575,6 +577,63 @@ router.post(
   })
 );
 
+/* ------------------------------------------- мост с серверным модом */
+
+/*
+ * Обмен с модом @DayZPanelBridge идёт файлами в папке профиля; протокол описан
+ * в docs/bridge-mod-prompt.md. Пока мод не установлен, все эти маршруты честно
+ * отвечают, что моста нет.
+ */
+
+router.get('/bridge', (req, res) => res.json(bridge.status(serverIdOf(req))));
+
+/** Создать папку обмена заранее — до первого запуска мода. */
+router.post('/bridge/prepare', wrap(async (req, res) => res.json(bridge.prepare(serverIdOf(req)))));
+
+/** Игроки онлайн с координатами — основа интерактивной карты. */
+router.get('/bridge/players', (req, res) => {
+  const serverId = serverIdOf(req);
+  res.json({ ...bridge.players(serverId), status: bridge.status(serverId) });
+});
+
+/** Инвентарь игрока: запрос уходит моду и ждёт ответа. */
+router.get(
+  '/bridge/players/:id/inventory',
+  wrap(async (req, res) => res.json(await bridge.inventory(serverIdOf(req), req.params.id)))
+);
+
+/** Действие над игроком или миром: message, kick, teleport, heal, set_stat, … */
+router.post(
+  '/bridge/command',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const result = await bridge.command(serverIdOf(req), body.action, body.args || {});
+    res.json({ ok: true, action: body.action, result });
+  })
+);
+
+/* --------------------------------------------------------- журнал событий */
+
+/**
+ * Лента событий. Фильтры: types (через запятую), playerId, search, before/since,
+ * days — насколько глубоко смотреть историю в файлах.
+ */
+router.get('/events', (req, res) => {
+  const serverId = serverIdOf(req);
+  res.json({
+    ...eventlog.list(serverId, req.query),
+    online: bridge.status(serverId).online
+  });
+});
+
+/** Сводка по типам событий за последние часы. */
+router.get('/events/summary', (req, res) =>
+  res.json(eventlog.summary(serverIdOf(req), parseInt(req.query.hours, 10) || 24))
+);
+
+/** Файлы истории событий по дням. */
+router.get('/events/files', (req, res) => res.json({ files: eventlog.files(serverIdOf(req)) }));
+
 /* ------------------------------------------------- сообщения в игру */
 
 /** Каким каналом панель пишет игрокам и готов ли он. */
@@ -834,6 +893,12 @@ router.get('/stream', (req, res) => {
   send('restarts', scheduler.allStates());
   send('announcements', announcer.allStates());
 
+  const activeServer = config.activeServer();
+  if (activeServer) {
+    send('bridge-status', { serverId: activeServer.id, ...bridge.status(activeServer.id) });
+    send('bridge-players', { serverId: activeServer.id, ...bridge.players(activeServer.id) });
+  }
+
   const offLog = logger.subscribe((entry) => send('log', entry));
   const onStatus = (status) => send('status', status);
   const onJob = (job) => send('job', job);
@@ -842,6 +907,9 @@ router.get('/stream', (req, res) => {
   const onWarning = (warning) => send('restart-warning', warning);
   const onAnnouncements = (states) => send('announcements', states);
   const onAnnouncement = (a) => send('announcement', a);
+  const onBridgeStatus = (s) => send('bridge-status', s);
+  const onBridgePlayers = (p) => send('bridge-players', p);
+  const onBridgeEvents = (e) => send('bridge-events', e);
 
   bus.on('status', onStatus);
   bus.on('job', onJob);
@@ -850,6 +918,9 @@ router.get('/stream', (req, res) => {
   bus.on('restart-warning', onWarning);
   bus.on('announcements', onAnnouncements);
   bus.on('announcement', onAnnouncement);
+  bus.on('bridge-status', onBridgeStatus);
+  bus.on('bridge-players', onBridgePlayers);
+  bus.on('bridge-events', onBridgeEvents);
 
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
 
@@ -863,6 +934,9 @@ router.get('/stream', (req, res) => {
     bus.off('restart-warning', onWarning);
     bus.off('announcements', onAnnouncements);
     bus.off('announcement', onAnnouncement);
+    bus.off('bridge-status', onBridgeStatus);
+    bus.off('bridge-players', onBridgePlayers);
+    bus.off('bridge-events', onBridgeEvents);
   });
 });
 

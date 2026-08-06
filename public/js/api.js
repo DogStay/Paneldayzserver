@@ -92,6 +92,23 @@ export const api = {
   missions: () => request('GET', '/missions'),
   selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
 
+  /* Мост с серверным модом: карта, игроки, действия, журнал событий */
+  bridge: () => request('GET', '/bridge'),
+  bridgePrepare: () => request('POST', '/bridge/prepare', {}),
+  bridgePlayers: () => request('GET', '/bridge/players'),
+  bridgeInventory: (id) => request('GET', `/bridge/players/${encodeURIComponent(id)}/inventory`),
+  bridgeCommand: (action, args) => request('POST', '/bridge/command', { action, args }),
+
+  events: (query) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query || {})) {
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+    }
+    const qs = params.toString();
+    return request('GET', `/events${qs ? `?${qs}` : ''}`);
+  },
+  eventsSummary: (hours) => request('GET', `/events/summary${hours ? `?hours=${hours}` : ''}`),
+
   ingame: () => request('GET', '/ingame'),
   ingameSay: (text) => request('POST', '/ingame/say', { text }),
 

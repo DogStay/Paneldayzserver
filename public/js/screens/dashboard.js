@@ -21,9 +21,15 @@ import { initSettingsTab } from './settings.js';
 import { initToolsTabs } from './tools.js';
 import { initDiagnosticsTab } from './diagnostics.js';
 import { initCFToolsTab } from './cftools.js';
+import { initMapTab } from './map.js';
+import { initEventLogTab } from './eventlog.js';
 
 const TABS = [
   { id: 'overview', label: 'Обзор', icon: 'activity' },
+  // Карта и журнал действий работают через серверный мод-мост; если его нет,
+  // вкладки сами объясняют, как его подключить.
+  { id: 'map', label: 'Карта', icon: 'map' },
+  { id: 'events', label: 'Логи', icon: 'file' },
   { id: 'mods', label: 'Модификации', icon: 'package' },
   { id: 'settings', label: 'Настройки сервера', icon: 'settings' },
   { id: 'cfg', label: 'Конфигурация', icon: 'file' },
@@ -60,6 +66,8 @@ export function initDashboardScreen() {
   initSettingsTab($('#pane-settings'));
   initToolsTabs({ cfg: $('#pane-cfg'), bat: $('#pane-bat'), firewall: $('#pane-firewall') });
   initCFToolsTab($('#pane-cftools'));
+  initMapTab($('#pane-map'));
+  initEventLogTab($('#pane-events'));
   initDiagnosticsTab($('#pane-diag'));
 
   on('config', syncOptionalTabs);

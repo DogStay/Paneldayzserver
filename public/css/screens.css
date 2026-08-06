@@ -531,3 +531,130 @@
 
 /* Отступ снизу, чтобы док-консоль не перекрывала контент */
 .screen { padding-bottom: 78px; }
+
+/* ---------------------------------------------- карта сервера и журнал логов */
+
+.map-wrap {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0d1117;
+}
+
+.map-wrap canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.map-wrap canvas:active { cursor: grabbing; }
+
+/* Список игроков и карточка выбранного — рядом, на узком экране друг под другом */
+.map-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .map-columns { grid-template-columns: minmax(0, 1fr); }
+}
+
+.mod-row.selected {
+  border-color: var(--acc);
+  background: var(--surface-2);
+}
+
+/* Строки инвентаря игрока */
+.inv-box {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.inv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.inv-row:last-child { border-bottom: none; }
+.inv-name { font-weight: 500; }
+
+/* Журнал событий */
+.ev-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 620px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.ev-row {
+  display: grid;
+  grid-template-columns: 132px 128px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.ev-row:last-child { border-bottom: none; }
+.ev-row:hover { background: var(--surface-2); }
+
+/* Свежая строка коротко подсвечивается, чтобы её заметили в живой ленте */
+.ev-row.fresh { animation: ev-flash 1.4s ease-out; }
+@keyframes ev-flash {
+  from { background: rgba(63, 185, 80, 0.16); }
+  to { background: transparent; }
+}
+
+.ev-time { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ev-pos { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ev-text { word-break: break-word; }
+
+.ev-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+.ev-type.t-damage, .ev-type.t-kill, .ev-type.t-death { color: #e5484d; }
+.ev-type.t-chat { color: #58a6ff; }
+.ev-type.t-connect, .ev-type.t-spawn { color: #3fb950; }
+.ev-type.t-disconnect { color: var(--text-faint); }
+.ev-type.t-build, .ev-type.t-dismantle, .ev-type.t-placement { color: #f0b429; }
+.ev-type.t-admin, .ev-type.t-server { color: #bc8cff; }
+
+@media (max-width: 820px) {
+  .ev-row { grid-template-columns: 96px minmax(0, 1fr); }
+  .ev-row .ev-pos { display: none; }
+}
+
+/* Галочка-«чип» для фильтров по типам событий */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--surface);
+}
+.chip:hover { border-color: var(--line-strong); }
+.chip input { accent-color: var(--acc); }
+.chip:has(input:checked) {
+  border-color: var(--acc);
+  background: var(--surface-2);
+}
