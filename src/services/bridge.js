@@ -37,6 +37,15 @@ const COMMAND_TIMEOUT_MS = 10_000;
 /** Мод считается живым, если снимок обновлялся не дольше этого времени назад. */
 const ONLINE_TIMEOUT_MS = 20_000;
 
+/** Сколько точек трассы держим на игрока (при снимке раз в 3 с это ~1 час). */
+const TRAIL_LIMIT = 1200;
+
+/** Точки старше этого времени выбрасываются. */
+const TRAIL_KEEP_MS = 2 * 3600_000;
+
+/** Насколько игрок должен сместиться, чтобы точка попала в трассу. */
+const TRAIL_MIN_STEP_M = 3;
+
 /** Размеры известных карт (метры на сторону) — если мод не сообщил свой. */
 const WORLD_SIZES = {
   chernarusplus: 15360,
@@ -68,7 +77,10 @@ function stateOf(serverId) {
       pending: new Map(),
       dropped: 0,
       lastEventAt: 0,
-      warned: ''
+      warned: '',
+      // playerId -> [{ ts, x, z }]: откуда пришёл игрок. Живёт в памяти панели,
+      // потому что мод шлёт позиции только в снимках и историю не хранит.
+      trails: new Map()
     });
   }
   return states.get(serverId);
@@ -242,6 +254,7 @@ function readSnapshot(serverId) {
   st.players = (Array.isArray(snapshot.players) ? snapshot.players : []).map(normalizePlayer);
   if (Number(snapshot.dropped) > 0) st.dropped = Number(snapshot.dropped);
 
+  recordTrails(serverId, st);
   bus.emit('bridge-players', { serverId, ...players(serverId) });
 }
 
@@ -279,6 +292,81 @@ function normalizePlayer(raw) {
     vehicle: p.vehicle ? String(p.vehicle) : null,
     playtimeSec: num(p.playtimeSec),
     ping: num(p.ping, -1)
+  };
+}
+
+/* ---------------------------------------------------------------- трассы */
+
+/**
+ * Запомнить, где игроки были.
+ *
+ * Точка добавляется, только если игрок реально сместился: стоящий на месте
+ * человек иначе за час накопил бы тысячу одинаковых координат.
+ */
+function recordTrails(serverId, st) {
+  const now = Date.now();
+
+  for (const player of st.players) {
+    if (!player.id) continue;
+
+    if (!st.trails.has(player.id)) st.trails.set(player.id, []);
+    const trail = st.trails.get(player.id);
+    const last = trail[trail.length - 1];
+
+    if (last && Math.hypot(player.pos[0] - last.x, player.pos[2] - last.z) < TRAIL_MIN_STEP_M) continue;
+
+    trail.push({ ts: now, x: player.pos[0], z: player.pos[2] });
+    if (trail.length > TRAIL_LIMIT) trail.splice(0, trail.length - TRAIL_LIMIT);
+  }
+
+  // Старые точки и трассы давно ушедших игроков не держим.
+  const cutoff = now - TRAIL_KEEP_MS;
+  for (const [id, trail] of st.trails) {
+    while (trail.length && trail[0].ts < cutoff) trail.shift();
+    if (!trail.length) st.trails.delete(id);
+  }
+}
+
+/**
+ * Трасса одного игрока.
+ * @param {string} serverId
+ * @param {string} playerId
+ * @param {number} [minutes] за сколько последних минут
+ */
+function trail(serverId, playerId, minutes = 30) {
+  const st = stateOf(serverId);
+  const points = st.trails.get(String(playerId)) || [];
+  const since = Date.now() - Math.min(Math.max(minutes, 1), 120) * 60_000;
+
+  const selected = points.filter((point) => point.ts >= since);
+  const player = st.players.find((p) => p.id === String(playerId));
+
+  return {
+    playerId: String(playerId),
+    name: player ? player.name : '',
+    online: Boolean(player),
+    minutes,
+    worldSize: worldSize(serverId),
+    points: selected,
+    // Пройденный путь по прямым между точками: грубо, но сразу видно, кто
+    // бегал по карте, а кто сидел в базе.
+    distanceM: Math.round(
+      selected.reduce((sum, point, index) => {
+        if (!index) return 0;
+        const previous = selected[index - 1];
+        return sum + Math.hypot(point.x - previous.x, point.z - previous.z);
+      }, 0)
+    )
+  };
+}
+
+/** Трассы всех, кто сейчас онлайн. */
+function allTrails(serverId, minutes = 15) {
+  const st = stateOf(serverId);
+  return {
+    worldSize: worldSize(serverId),
+    minutes,
+    trails: st.players.map((player) => trail(serverId, player.id, minutes))
   };
 }
 
@@ -465,6 +553,8 @@ module.exports = {
   status,
   players,
   playerOf,
+  trail,
+  allTrails,
   command,
   inventory,
   prepare,

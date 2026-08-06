@@ -658,3 +658,48 @@
   border-color: var(--acc);
   background: var(--surface-2);
 }
+
+/* Меню действий по правому клику на карте */
+.map-menu {
+  position: absolute;
+  z-index: 5;
+  min-width: 232px;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-2);
+}
+
+.map-menu-head {
+  padding: 6px 10px 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.map-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.map-menu button:hover { background: var(--surface-3); }
+.map-menu button svg { flex: 0 0 auto; }
+
+.map-menu-note {
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}

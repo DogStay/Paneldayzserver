@@ -17,7 +17,18 @@ import { esc, icon, toast, busy, modal, confirmDialog, fmtUptime, fmtDate } from
 
 let paneRef = null;
 let canvas = null;
-let view = { worldSize: 15360, players: [], selectedId: '', bg: null, bgTried: '' };
+let view = {
+  worldSize: 15360,
+  players: [],
+  selectedId: '',
+  bg: null,
+  bgTried: '',
+  /** Трасса выбранного игрока и трассы всех — рисуются поверх карты. */
+  trail: null,
+  trails: [],
+  trailMinutes: 30,
+  showAllTrails: false
+};
 /** Масштаб и сдвиг карты — колесо мыши и перетаскивание. */
 let camera = { zoom: 1, x: 0, y: 0, dragging: false };
 
@@ -31,6 +42,10 @@ export function initMapTab(pane) {
 
     view.players = data.players || [];
     view.worldSize = data.worldSize || view.worldSize;
+
+    const selected = view.players.find((p) => p.id === view.selectedId);
+    if (selected) appendTrailPoint(selected);
+
     if (paneRef && paneRef.classList.contains('active')) {
       draw();
       renderList();
@@ -67,6 +82,7 @@ async function load() {
   await loadBackground(status.world);
   draw();
   renderList();
+  await refreshTrails();
 }
 
 const notice = (kind, ic, html) =>
@@ -117,6 +133,16 @@ function renderShell(status) {
             игроков ${view.players.length}${status.gameTime ? ` · в игре ${esc(status.gameTime)}` : ''}</div></div>
         <span class="spacer"></span>
         <div class="row wrap">
+          <label class="switch" style="margin:0">
+            <input type="checkbox" id="map-all-trails" ${view.showAllTrails ? 'checked' : ''}>
+            <span class="track"></span><span class="switch-text">Трассы всех</span>
+          </label>
+          <select id="map-trail-minutes" style="width:130px">
+            <option value="10" ${view.trailMinutes === 10 ? 'selected' : ''}>за 10 минут</option>
+            <option value="30" ${view.trailMinutes === 30 ? 'selected' : ''}>за 30 минут</option>
+            <option value="60" ${view.trailMinutes === 60 ? 'selected' : ''}>за час</option>
+            <option value="120" ${view.trailMinutes === 120 ? 'selected' : ''}>за 2 часа</option>
+          </select>
           <button class="btn btn-sm" id="map-zoom-in">${icon('plus')}</button>
           <button class="btn btn-sm" id="map-zoom-out">−</button>
           <button class="btn btn-sm" id="map-reset">${icon('refresh')} Вписать</button>
@@ -125,9 +151,11 @@ function renderShell(status) {
 
       <div class="map-wrap">
         <canvas id="map-canvas" width="900" height="900"></canvas>
+        <div class="map-menu hidden" id="map-menu"></div>
       </div>
-      <div class="hint" style="margin-top:8px">Колесо мыши — масштаб, перетаскивание — сдвиг.
-        Клик по метке — карточка игрока. Свой фон: положите картинку в
+      <div class="hint" style="margin-top:8px">Колесо мыши — масштаб, перетаскивание — сдвиг,
+        клик по метке — карточка игрока, <b>правый клик по карте</b> — заспавнить объект или
+        телепортировать выбранного игрока в это место. Свой фон: положите картинку в
         <span class="inline-code">public/maps/${esc(status.world || 'chernarusplus')}.jpg</span></div>
     </div>
 
@@ -154,6 +182,16 @@ function renderShell(status) {
   paneRef.querySelector('#map-reset').addEventListener('click', () => {
     camera = { zoom: 1, x: 0, y: 0, dragging: false };
     draw();
+  });
+
+  paneRef.querySelector('#map-trail-minutes').addEventListener('change', (e) => {
+    view.trailMinutes = Number(e.currentTarget.value) || 30;
+    refreshTrails();
+  });
+
+  paneRef.querySelector('#map-all-trails').addEventListener('change', (e) => {
+    view.showAllTrails = e.currentTarget.checked;
+    refreshTrails();
   });
 }
 
@@ -186,6 +224,25 @@ function toScreen(pos) {
     x: pos[0] * scale + camera.x,
     // В DayZ z растёт на север, а на холсте вниз — переворачиваем.
     y: size - pos[2] * scale + camera.y - size * (camera.zoom - 1)
+  };
+}
+
+/** Обратное преобразование: клик по холсту -> координаты в мире. */
+function toWorld(px, py) {
+  const size = canvas.width;
+  const scale = (size / view.worldSize) * camera.zoom;
+  return {
+    x: (px - camera.x) / scale,
+    z: (size + camera.y - size * (camera.zoom - 1) - py) / scale
+  };
+}
+
+/** Клик по холсту в координатах холста (он масштабируется по ширине карточки). */
+function canvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((event.clientY - rect.top) / rect.height) * canvas.height
   };
 }
 
@@ -241,6 +298,15 @@ function draw() {
     }
   }
 
+  // Трассы под метками: сначала чужие бледные, потом выбранного — ярче.
+  if (view.showAllTrails) {
+    for (const item of view.trails) {
+      if (item.playerId === view.selectedId) continue;
+      drawTrail(ctx, item.points, 'rgba(88,166,255,ALPHA)', 1.5);
+    }
+  }
+  if (view.trail) drawTrail(ctx, view.trail.points, 'rgba(240,180,41,ALPHA)', 2.5);
+
   // Метки игроков поверх сетки.
   for (const player of view.players) {
     const p = toScreen(player.pos);
@@ -276,33 +342,222 @@ function draw() {
 }
 
 function bindCanvas() {
+  // Холст 900×900 растягивается по ширине карточки, поэтому координаты события
+  // нужно пересчитывать: e.offsetX — это пиксели на экране, а не на холсте.
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.offsetX, e.offsetY);
+    const point = canvasPoint(e);
+    zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15, point.x, point.y);
   });
 
   let last = null;
   canvas.addEventListener('mousedown', (e) => {
-    last = { x: e.offsetX, y: e.offsetY };
+    if (e.button !== 0) return;
+    last = canvasPoint(e);
     camera.dragging = false;
+    hideMenu();
   });
   canvas.addEventListener('mousemove', (e) => {
     if (!last) return;
-    camera.x += e.offsetX - last.x;
-    camera.y += e.offsetY - last.y;
-    last = { x: e.offsetX, y: e.offsetY };
+    const point = canvasPoint(e);
+    camera.x += point.x - last.x;
+    camera.y += point.y - last.y;
+    last = point;
     camera.dragging = true;
     draw();
   });
   canvas.addEventListener('mouseup', (e) => {
+    if (e.button !== 0) return;
     const wasDragging = camera.dragging;
     last = null;
     camera.dragging = false;
-    if (!wasDragging) pickPlayer(e.offsetX, e.offsetY);
+    if (!wasDragging) {
+      const point = canvasPoint(e);
+      pickPlayer(point.x, point.y);
+    }
   });
   canvas.addEventListener('mouseleave', () => {
     last = null;
   });
+
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openMenu(e);
+  });
+}
+
+/* ------------------------------------------------- меню по правому клику */
+
+function hideMenu() {
+  const menu = paneRef && paneRef.querySelector('#map-menu');
+  if (menu) menu.classList.add('hidden');
+}
+
+/**
+ * Меню действий в точке карты: заспавнить объект, телепортировать выбранного
+ * игрока, скопировать координаты. Всё это команды мода-моста.
+ */
+function openMenu(event) {
+  const menu = paneRef.querySelector('#map-menu');
+  if (!menu) return;
+
+  const point = canvasPoint(event);
+  const world = toWorld(point.x, point.y);
+  const x = Math.round(world.x);
+  const z = Math.round(world.z);
+
+  const inside = x >= 0 && z >= 0 && x <= view.worldSize && z <= view.worldSize;
+  if (!inside) return hideMenu();
+
+  const selected = view.players.find((p) => p.id === view.selectedId);
+
+  menu.innerHTML = `
+    <div class="map-menu-head">${x} / ${z}</div>
+    <button data-menu="spawn">${icon('package')} Заспавнить объект здесь…</button>
+    ${selected
+      ? `<button data-menu="teleport">${icon('map')} Телепортировать «${esc(selected.name)}» сюда</button>`
+      : '<div class="map-menu-note">Выберите игрока, чтобы телепортировать его сюда</div>'}
+    <button data-menu="copy">${icon('file')} Скопировать координаты</button>`;
+
+  // Меню рисуется в пикселях карточки, а не холста.
+  const rect = canvas.getBoundingClientRect();
+  menu.style.left = `${event.clientX - rect.left}px`;
+  menu.style.top = `${event.clientY - rect.top}px`;
+  menu.classList.remove('hidden');
+
+  menu.querySelectorAll('[data-menu]').forEach((button) => {
+    button.addEventListener('click', () => {
+      hideMenu();
+      const action = button.dataset.menu;
+
+      if (action === 'copy') {
+        navigator.clipboard
+          .writeText(`${x} ${z}`)
+          .then(() => toast('Координаты скопированы', 'ok'))
+          .catch(() => toast(`Координаты: ${x} ${z}`, 'info', 9000));
+        return;
+      }
+
+      if (action === 'teleport' && selected) {
+        api
+          .bridgeCommand('teleport', { id: selected.id, pos: [x, 0, z] })
+          .then(() => toast(`${selected.name} телепортирован в ${x} / ${z}`, 'ok'))
+          .catch((err) => toast(err.message, 'err', 12000));
+        return;
+      }
+
+      if (action === 'spawn') openSpawnModal(x, z);
+    });
+  });
+}
+
+/** Что заспавнить в выбранной точке. */
+function openSpawnModal(x, z) {
+  const m = modal({
+    title: 'Заспавнить объект',
+    subtitle: `Точка ${x} / ${z}`,
+    icon: 'package',
+    body: `
+      <div class="form-grid one">
+        <div class="field">
+          <label>Класс объекта</label>
+          <input type="text" id="spawn-class" value="" placeholder="например Sedan_02, AKM, SeaChest">
+          <div class="hint">Точное имя класса из игры или мода: транспорт, оружие, ящик, палатка.</div>
+        </div>
+        <div class="field">
+          <label>Количество в предмете <span class="badge">необязательно</span></label>
+          <input type="number" id="spawn-quantity" value="0" min="0">
+          <div class="hint">Для патронов, еды, жидкостей. 0 — как в игре по умолчанию.</div>
+        </div>
+      </div>`,
+    footer: `
+      <span class="spacer"></span>
+      <button class="btn" data-close>Отмена</button>
+      <button class="btn btn-primary" id="spawn-go">${icon('package')} Заспавнить</button>`
+  });
+
+  m.footer.querySelector('#spawn-go').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const itemClass = m.body.querySelector('#spawn-class').value.trim();
+      if (!itemClass) return toast('Укажите класс объекта', 'warn');
+
+      const quantity = Number(m.body.querySelector('#spawn-quantity').value) || 0;
+      await api.bridgeCommand('spawn_object', { itemClass, pos: [x, 0, z], quantity });
+
+      m.close();
+      toast(`${itemClass} создан в ${x} / ${z}`, 'ok', 9000);
+    })
+  );
+}
+
+/* ------------------------------------------------------------- трассы */
+
+/** Подтянуть трассы с сервера: выбранного игрока и, если нужно, всех. */
+async function refreshTrails() {
+  if (view.showAllTrails) {
+    try {
+      const data = await api.bridgeTrails(view.trailMinutes);
+      view.trails = data.trails || [];
+    } catch (_) {
+      view.trails = [];
+    }
+  } else {
+    view.trails = [];
+  }
+
+  if (view.selectedId) {
+    try {
+      view.trail = await api.bridgeTrail(view.selectedId, view.trailMinutes);
+    } catch (_) {
+      view.trail = null;
+    }
+  } else {
+    view.trail = null;
+  }
+
+  draw();
+  if (view.selectedId) renderCard(view.selectedId);
+}
+
+/**
+ * Дописать свежую точку в уже загруженную трассу.
+ *
+ * Снимок приходит каждые несколько секунд, и просить сервер каждый раз о всей
+ * трассе незачем: новая точка уже есть в снимке.
+ */
+function appendTrailPoint(player) {
+  if (!view.trail || view.trail.playerId !== player.id) return;
+
+  const points = view.trail.points;
+  const last = points[points.length - 1];
+  if (last && Math.hypot(player.pos[0] - last.x, player.pos[2] - last.z) < 3) return;
+
+  points.push({ ts: Date.now(), x: player.pos[0], z: player.pos[2] });
+  if (last) view.trail.distanceM += Math.round(Math.hypot(player.pos[0] - last.x, player.pos[2] - last.z));
+}
+
+/** Линия пути: свежие участки ярче, старые бледнее. */
+function drawTrail(ctx, points, colour, width) {
+  if (!points || points.length < 2) return;
+
+  for (let i = 1; i < points.length; i++) {
+    const from = toScreen([points[i - 1].x, 0, points[i - 1].z]);
+    const to = toScreen([points[i].x, 0, points[i].z]);
+
+    ctx.strokeStyle = colour.replace('ALPHA', String(0.15 + 0.75 * (i / points.length)).slice(0, 4));
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+  }
+
+  // Точка старта — чтобы было видно, откуда игрок пришёл.
+  const start = toScreen([points[0].x, 0, points[0].z]);
+  ctx.fillStyle = colour.replace('ALPHA', '0.9');
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, 3, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function zoomBy(factor, cx, cy) {
@@ -380,9 +635,11 @@ function renderList() {
 
 function select(id) {
   view.selectedId = id;
+  view.trail = null;
   draw();
   renderList();
   renderCard(id);
+  refreshTrails();
 }
 
 /* ----------------------------------------------------------- карточка игрока */
@@ -428,6 +685,12 @@ function renderCard(id) {
           ${player.unconscious ? '<span class="badge warn">без сознания</span>' : ''}
           ${player.restrained ? '<span class="badge warn">связан</span>' : ''}
         </div>`
+      : ''}
+
+    ${view.trail && view.trail.playerId === player.id && view.trail.points.length > 1
+      ? `<div class="notice info" style="margin-top:12px"><span class="ic">${icon('map')}</span>
+          <div>Трасса за ${view.trail.minutes} мин.: ${view.trail.points.length} точек,
+          пройдено примерно ${view.trail.distanceM} м. Начало пути отмечено точкой на карте.</div></div>`
       : ''}
 
     <div class="row wrap" style="margin-top:16px">

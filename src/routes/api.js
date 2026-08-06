@@ -640,6 +640,16 @@ router.get('/bridge/players', (req, res) => {
   res.json({ ...bridge.players(serverId), status: bridge.status(serverId) });
 });
 
+/** Где игрок был: трасса перемещений по снимкам состояния. */
+router.get('/bridge/players/:id/trail', (req, res) =>
+  res.json(bridge.trail(serverIdOf(req), req.params.id, parseInt(req.query.minutes, 10) || 30))
+);
+
+/** Трассы всех, кто онлайн. */
+router.get('/bridge/trails', (req, res) =>
+  res.json(bridge.allTrails(serverIdOf(req), parseInt(req.query.minutes, 10) || 15))
+);
+
 /** Инвентарь игрока: запрос уходит моду и ждёт ответа. */
 router.get(
   '/bridge/players/:id/inventory',

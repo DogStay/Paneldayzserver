@@ -110,6 +110,9 @@ export const api = {
   bridgePrepare: () => request('POST', '/bridge/prepare', {}),
   bridgePlayers: () => request('GET', '/bridge/players'),
   bridgeInventory: (id) => request('GET', `/bridge/players/${encodeURIComponent(id)}/inventory`),
+  bridgeTrail: (id, minutes) =>
+    request('GET', `/bridge/players/${encodeURIComponent(id)}/trail?minutes=${minutes || 30}`),
+  bridgeTrails: (minutes) => request('GET', `/bridge/trails?minutes=${minutes || 15}`),
   bridgeCommand: (action, args) => request('POST', '/bridge/command', { action, args }),
 
   events: (query) => {
