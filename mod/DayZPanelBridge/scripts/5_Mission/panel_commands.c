@@ -27,7 +27,7 @@ class PanelCommands extends PanelCommandHandler
             case "add_stat": return SetStat(args, true, error);
             case "give_item": return GiveItem(args, resultJson, error);
             case "remove_item": return RemoveItem(args, resultJson, error);
-            case "inventory": return Inventory(args, resultJson, error);
+            case "inventory": return ReadInventory(args, resultJson, error);
             case "godmode": return GodMode(args, error);
             case "kill": return Kill(args, error);
             case "spawn_object": return SpawnObject(args, resultJson, error);
@@ -377,7 +377,7 @@ class PanelCommands extends PanelCommandHandler
         return true;
     }
 
-    private bool Inventory(PanelCommandArgs args, out string resultJson, out string error)
+    private bool ReadInventory(PanelCommandArgs args, out string resultJson, out string error)
     {
         PlayerBase player = Find(args.id);
         if (!player)

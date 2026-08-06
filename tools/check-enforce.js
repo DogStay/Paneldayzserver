@@ -103,7 +103,46 @@ function scanLine(line) {
   return problems;
 }
 
-function checkFile(file) {
+/**
+ * Имена классов и enum из ванильных скриптов DayZ.
+ *
+ * Нужны для проверки столкновений: если метод мода назван как ванильный класс,
+ * вызов уходит в конструктор этого класса. Так сборка 1.0.3 не компилировалась —
+ * метод `Inventory()` против класса `Inventory: LayoutHolder`:
+ * «Types 'PanelCommandArgs' and 'LayoutHolder' are unrelated».
+ *
+ * Дамп скриптов есть не всегда, поэтому проверка необязательная: путь передаётся
+ * вторым аргументом или переменной окружения DAYZ_SCRIPTS.
+ */
+function vanillaNames(dir) {
+  const names = new Set();
+  if (!dir || !fs.existsSync(dir)) return names;
+
+  for (const file of collect(dir)) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const match of text.matchAll(/^\s*(?:modded\s+)?(?:class|enum)\s+([A-Za-z_]\w*)/gm)) {
+      names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+/** Объявления методов в файле: [строка, имя]. */
+function methodsOf(text) {
+  const found = [];
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')).replace(/\/\/[^\n]*/g, '');
+  const declaration = /^\s*(?:(?:static|private|protected|override|ref)\s+)*[A-Za-z_][\w<>,\s]*?\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:\{|$)/gm;
+
+  for (const match of code.matchAll(declaration)) {
+    // Совпадение может начаться строкой выше (перед типом стоит перевод строки),
+    // поэтому строку считаем по позиции самого имени, а не начала совпадения.
+    const at = match.index + match[0].lastIndexOf(match[1]);
+    found.push([code.slice(0, at).split('\n').length, match[1]]);
+  }
+  return found;
+}
+
+function checkFile(file, vanilla = new Set()) {
   const text = fs.readFileSync(file, 'utf8');
   const lines = text.split(/\r?\n/);
   const problems = [];
@@ -152,16 +191,43 @@ function checkFile(file) {
     problems.push({ line: 0, text: '', problem: `скобки не сходятся: { ${open}, } ${close}` });
   }
 
+  // Метод, названный как ванильный класс: вызов уйдёт в конструктор этого класса.
+  if (vanilla.size) {
+    const own = new Set(
+      [...text.matchAll(/^\s*(?:modded\s+)?class\s+([A-Za-z_]\w*)/gm)].map((match) => match[1])
+    );
+
+    for (const [line, name] of methodsOf(text)) {
+      if (own.has(name) || !vanilla.has(name)) continue;
+      problems.push({
+        line,
+        text: '',
+        problem:
+          `метод ${name}() назван как ванильный класс ${name} — вызов уйдёт в его конструктор ` +
+          '(«Types ... are unrelated»). Переименуйте метод'
+      });
+    }
+  }
+
   return problems;
 }
 
 function main() {
   const root = process.argv[2] || 'mod/DayZPanelBridge';
+  const scriptsDir = process.argv[3] || process.env.DAYZ_SCRIPTS || '';
+  const vanilla = vanillaNames(scriptsDir);
   const files = collect(root);
   let bad = 0;
 
+  console.log(
+    vanilla.size
+      ? `Имён ванильных классов для сверки: ${vanilla.size} (${scriptsDir})`
+      : 'Дамп ванильных скриптов не указан — проверка столкновений имён пропущена ' +
+        '(передайте путь вторым аргументом или в DAYZ_SCRIPTS)'
+  );
+
   for (const file of files) {
-    const problems = checkFile(file);
+    const problems = checkFile(file, vanilla);
     if (!problems.length) continue;
 
     bad += problems.length;

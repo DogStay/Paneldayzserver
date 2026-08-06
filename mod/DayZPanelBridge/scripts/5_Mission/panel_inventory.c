@@ -23,7 +23,7 @@ class PanelInventory
         if (hands) json += "," + PanelJson.KRaw("hands", ItemJson(hands, 0, maxDepth));
         else json += "," + PanelJson.KNull("hands");
 
-        json += "," + PanelJson.KRaw("clothing", PanelJson.Arr(Attachments(player, 0, maxDepth)));
+        json += "," + PanelJson.KRaw("clothing", PanelJson.Arr(DumpAttachments(player, 0, maxDepth)));
         // Своего грузового отсека у игрока нет: всё лежит в надетых вещах,
         // поэтому cargo здесь всегда пуст — панель это учитывает.
         json += "," + PanelJson.KRaw("cargo", PanelJson.Arr(""));
@@ -43,7 +43,7 @@ class PanelInventory
         string children = "";
         if (depth < maxDepth)
         {
-            children = Attachments(entity, depth + 1, maxDepth);
+            children = DumpAttachments(entity, depth + 1, maxDepth);
 
             string cargo = Cargo(entity, depth + 1, maxDepth);
             if (cargo != "")
@@ -58,7 +58,7 @@ class PanelInventory
     }
 
     /** Вложения (надетое, прикрученное к оружию). */
-    private static string Attachments(EntityAI entity, int depth, int maxDepth)
+    private static string DumpAttachments(EntityAI entity, int depth, int maxDepth)
     {
         GameInventory inventory = entity.GetInventory();
         if (!inventory) return "";
