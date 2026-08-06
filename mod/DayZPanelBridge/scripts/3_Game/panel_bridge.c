@@ -114,7 +114,7 @@ class PanelBridge
     static const string SNAPSHOT_FILE = "$profile:panel/snapshot.json";
 
     static const int PROTOCOL = 1;
-    static const string MOD_VERSION = "1.0.5";
+    static const string MOD_VERSION = "1.0.6";
 
     private static ref PanelBridge s_Instance;
 

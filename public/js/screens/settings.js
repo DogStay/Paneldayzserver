@@ -517,6 +517,7 @@ Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</
         <div><h2>Подложка карты</h2>
           <div class="card-sub">Настоящая карта под метками игроков на вкладке «Карта»</div></div>
         <span class="spacer"></span>
+        <button class="btn btn-sm" id="tiles-test" type="button">${icon('zap')} Проверить источник</button>
         <button class="btn btn-sm" id="tiles-clear" type="button">${icon('trash')} Очистить кэш</button>
       </div>
       <div id="tiles-box"><div class="small faint">Читаю настройки подложки…</div></div>
@@ -914,6 +915,11 @@ function bindTiles() {
         </div>
       </div>
 
+      ${t.template ? `<div class="field" style="margin-top:12px">
+        <label>Адрес тайлов, который используется сейчас</label>
+        <div class="inline-code" style="word-break:break-all">${esc(t.template)}</div>
+      </div>` : ''}
+
       <div class="hint" style="margin-top:10px">${esc(t.attribution)}. Панель скачивает каждый тайл
         один раз и дальше отдаёт с диска — чужой сервер не нагружается, а карта работает без интернета.
         Свой адрес нужен для самодельных карт: поддерживается обычная схема
@@ -938,6 +944,19 @@ function bindTiles() {
       })
     );
   };
+
+  paneRef.querySelector('#tiles-test').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const r = await api.testMapTiles();
+      if (r.ok) {
+        toast(`Источник отвечает: тайл ${Math.round(r.bytes / 1024)} КБ, ${r.type || 'изображение'}`, 'ok', 9000);
+      } else {
+        // Показываем и адрес: по нему сразу видно, та ли это карта и версия.
+        toast(`Тайлы не приходят: ${r.error}${r.url ? `\nАдрес: ${r.url}` : ''}`, 'err', 15000);
+      }
+      await render();
+    })
+  );
 
   paneRef.querySelector('#tiles-clear').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {

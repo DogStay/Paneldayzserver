@@ -43,6 +43,30 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Ключи тайлов, которых у источника нет — чтобы не спрашивать их снова. */
 const missing = new Set();
+
+/**
+ * Последний отказ источника: «карта/слой» -> {at, reason}.
+ *
+ * Пока отказ свежий, панель не дёргает источник на каждый тайл (иначе один
+ * взгляд на карту — это десятки запросов в пустоту) и показывает причину
+ * админу вместо пустого холста.
+ */
+const failures = new Map();
+const FAILURE_COOLDOWN_MS = 60_000;
+
+function noteFailure(key, reason) {
+  failures.set(key, { at: Date.now(), reason });
+}
+
+function freshFailure(key) {
+  const item = failures.get(key);
+  if (!item) return null;
+  if (Date.now() - item.at > FAILURE_COOLDOWN_MS) {
+    failures.delete(key);
+    return null;
+  }
+  return item;
+}
 let running = 0;
 const queue = [];
 
@@ -191,10 +215,20 @@ function fetchUrl(url, redirects = 0) {
           return fetchUrl(next, redirects + 1).then(resolve, reject);
         }
 
-        if (status === 404 || status === 403) {
+        // 404 — тайла действительно нет (край карты, дальний зум). 403/401 —
+        // другое: источник не отдаёт тайлы этому клиенту. Путать их нельзя,
+        // иначе панель будет молча считать, что карта просто закончилась.
+        if (status === 404) {
           res.resume();
-          const error = new Error(`тайла нет (${status})`);
+          const error = new Error('тайла нет (404)');
           error.code = 'missing';
+          return reject(error);
+        }
+
+        if (status === 403 || status === 401) {
+          res.resume();
+          const error = new Error(`источник отказал в доступе (${status})`);
+          error.code = 'forbidden';
           return reject(error);
         }
 
@@ -281,6 +315,14 @@ async function tile(world, layer, z, x, y) {
     throw error;
   }
 
+  const sourceKey = `${worldOf(world)}/${kind}`;
+  const failed = freshFailure(sourceKey);
+  if (failed) {
+    const error = new Error(failed.reason);
+    error.code = 'source-down';
+    throw error;
+  }
+
   const url = template
     .replace('{z}', String(zoom))
     .replace('{x}', String(tx))
@@ -293,6 +335,7 @@ async function tile(world, layer, z, x, y) {
     // Отсутствующий тайл — обычное дело на краях карты и на дальних зумах,
     // поэтому в лог он не пишется: запомнили и больше не спрашиваем.
     if (err.code === 'missing') missing.add(key);
+    else noteFailure(sourceKey, err.message);
     throw err;
   }
 
@@ -303,6 +346,8 @@ async function tile(world, layer, z, x, y) {
     error.code = 'bad-upstream';
     throw error;
   }
+
+  failures.delete(sourceKey);
 
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -353,6 +398,71 @@ function contentTypeOf(file) {
   return 'image/webp';
 }
 
+/* ------------------------------------------------------- проверка источника */
+
+/**
+ * Скачать один тайл прямо сейчас и рассказать, что получилось.
+ *
+ * Нужно для ответа на вопрос «почему карта пустая»: причин ровно три —
+ * карты нет в каталоге, нет сети, или источник отвечает отказом. Без такой
+ * проверки их не различить, потому что браузер видит только пустой холст.
+ */
+async function test(world, layer) {
+  const kind = layer === 'satellite' ? 'satellite' : 'topographic';
+  const template = templateFor(world, kind);
+  const entry = resolve(world);
+
+  const result = {
+    world: worldOf(world),
+    known: Boolean(entry),
+    layer: kind,
+    template,
+    url: '',
+    ok: false,
+    error: '',
+    bytes: 0,
+    type: ''
+  };
+
+  if (!template) {
+    result.error = entry
+      ? `для карты «${result.world}» нет слоя «${kind}»`
+      : `карта «${result.world || '—'}» не в каталоге панели: укажите свой адрес тайлов`;
+    return result;
+  }
+
+  // Нулевой зум — это один тайл на всю карту, он есть у любого источника.
+  result.url = template.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
+
+  try {
+    const tile = await enqueue(() => fetchUrl(result.url));
+    result.bytes = tile.body.length;
+    result.type = tile.type;
+
+    if (!looksLikeImage(tile.body)) {
+      result.error = 'источник ответил, но это не картинка — проверьте адрес';
+      return result;
+    }
+
+    result.ok = true;
+    failures.delete(`${result.world}/${kind}`);
+  } catch (err) {
+    if (err.code === 'missing') {
+      result.error =
+        'источник ответил «нет такого тайла» (404) — вероятно, у этой карты сменилась версия тайлов; ' +
+        'укажите свой адрес в настройках';
+    } else if (err.code === 'forbidden') {
+      result.error =
+        `${err.message} — он не отдаёт тайлы программам или закрыт для вашей сети. ` +
+        'Поднимите свой тайл-сервер (например, dzmap) и укажите его адрес ниже';
+    } else {
+      result.error = `${err.message} — проверьте, есть ли на этой машине интернет`;
+    }
+  }
+
+  return result;
+}
+
 /* ------------------------------------------------------------------ статус */
 
 /**
@@ -373,11 +483,13 @@ function status(world) {
     tileSize: TILE_SIZE,
     tiles: {
       ...s,
-      // Полный адрес не нужен браузеру, но админу полезно видеть источник.
       source: template ? new URL(template.replace(/\{[zxy]\}/g, '0')).origin : '',
+      // Полный шаблон полезен админу: по нему видно и карту, и версию тайлов.
+      template,
       hasSource: Boolean(template)
     },
     cache: cacheStats(world),
+    lastError: (freshFailure(`${worldOf(world)}/${s.layer}`) || {}).reason || '',
     reason: reasonFor(entry, template, s)
   };
 }
@@ -404,6 +516,7 @@ module.exports = {
   settings,
   status,
   tile,
+  test,
   cacheStats,
   clearCache
 };

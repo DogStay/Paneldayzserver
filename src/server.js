@@ -23,6 +23,7 @@ const diagnostics = require('./services/diagnostics');
 const scheduler = require('./services/scheduler');
 const announcer = require('./services/announcer');
 const bridge = require('./services/bridge');
+const adminlog = require('./services/adminlog');
 const auth = require('./services/auth');
 const firewall = require('./services/firewall');
 const access = require('./services/access');
@@ -139,6 +140,7 @@ httpServer.listen(port, host, () => {
   scheduler.start();
   announcer.start();
   bridge.start();
+  adminlog.start();
   logger.info('panel', '═'.repeat(60));
 });
 
@@ -213,6 +215,7 @@ async function shutdown(signal) {
   scheduler.stop();
   announcer.stop();
   bridge.stop();
+  adminlog.stop();
   auth.stop();
   await serverProcess.shutdown();
   httpServer.close(() => process.exit(0));

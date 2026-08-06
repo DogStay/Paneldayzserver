@@ -158,6 +158,7 @@ node ..\tools\check-enforce.js DayZPanelBridge
 | 1.0.2 | `Broken expression (missing ';'?)` + `Can't compile "Game" script module!` | локальная переменная названа `event` — это ключевое слово Enforce (модификатор метода: `event protected void EOnTouch(...)`) | имена переменных проверяются по списку ключевых слов в `tools/check-enforce.js`; заодно исправлен тип `out`-параметра `FindFile`: `FileAttr`, а не `int` |
 | 1.0.3 | `Types 'PanelCommandArgs' and 'LayoutHolder' are unrelated` + `Can't compile "Mission" script module!` | метод назван как ванильный класс (`Inventory`, `Attachments`) — вызов уходит в конструктор этого класса | имена методов сверяются с именами ванильных классов: `node tools/check-enforce.js mod/DayZPanelBridge <путь к дампу scripts>` (или переменная `DAYZ_SCRIPTS`) |
 | 1.0.4 | метки игроков стояли не на своих местах на больших картах | размер мира брался из короткой таблички в моде, и для Raman (32768 м) он был вчетверо меньше | размер спрашивается у движка: `GetGame().GetWorld().GetWorldSize()` |
+| 1.0.5 | «Мод не ответил на команду inventory за 10 с», остальные команды работали | в ответе инвентаря была лишняя открывающая скобка (`"{" + …` и потом ещё `PanelJson.Obj()`), JSON не разбирался, и панель молча теряла всю пачку событий | скобки добавляет только `Obj()`; панель теперь пишет в лог, какой файл и чем именно плох |
 
 **`hello.json` не появляется.** Мод не загрузился: проверьте, что папка
 `@DayZPanelBridge` лежит рядом с `DayZServer_x64.exe`, а в строке запуска стоит

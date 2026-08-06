@@ -22,7 +22,7 @@ class CfgMods
         credits = "DayZ Panel";
         author = "DayZ Panel";
         authorID = "0";
-        version = "1.0.5";
+        version = "1.0.6";
         extra = 0;
         type = "mod";
         dependencies[] = {"Game", "World", "Mission"};

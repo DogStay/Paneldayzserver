@@ -36,6 +36,7 @@ const auth = require('../services/auth');
 const access = require('../services/access');
 const eventlog = require('../services/eventlog');
 const maptiles = require('../services/maptiles');
+const adminlog = require('../services/adminlog');
 
 const router = express.Router();
 
@@ -640,6 +641,7 @@ router.post(
   wrap(async (req, res) => {
     const body = req.body || {};
     const result = missions.select(serverIdOf(req), body.mission, { force: body.force === true });
+    adminlog.note(serverIdOf(req), 'карта', `выбрана карта ${body.mission}`);
     res.json({ ...result, ...missions.list(serverIdOf(req)) });
   })
 );
@@ -660,6 +662,9 @@ function worldOf(serverId) {
   const v = config.active(serverId);
   return v.server.mission || '';
 }
+
+/** Читаются ли логи VPPAdminTools и где они лежат. */
+router.get('/adminlog', (req, res) => res.json(adminlog.status(serverIdOf(req))));
 
 router.get('/map', (req, res) => {
   const serverId = serverIdOf(req);
@@ -682,9 +687,25 @@ router.get(
     } catch (err) {
       // Пустой тайл — нормальная ситуация (край карты, дальний зум): 404 без шума.
       const status =
-        err.code === 'missing' ? 404 : err.code === 'bad-request' ? 400 : err.code === 'no-source' ? 501 : 502;
+        err.code === 'missing'
+          ? 404
+          : err.code === 'bad-request'
+            ? 400
+            : err.code === 'no-source'
+              ? 501
+              : 502;
       res.status(status).json({ error: err.message });
     }
+  })
+);
+
+/** Скачать один тайл прямо сейчас и показать, что ответил источник. */
+router.post(
+  '/map/test',
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const layer = (req.body || {}).layer;
+    res.json(await maptiles.test(worldOf(serverId), layer));
   })
 );
 
@@ -701,6 +722,7 @@ router.post(
   wrap(async (req, res) => {
     const serverId = serverIdOf(req);
     const server = config.getServer(serverId);
+    adminlog.note(serverId, 'сервер', 'запуск сервера из панели');
 
     const job = jobs.run(
       { type: 'start-server', title: `Запуск сервера «${server.name}»`, serverId },
@@ -719,7 +741,11 @@ router.post(
 
 router.post(
   '/server/stop',
-  wrap(async (req, res) => res.json(await serverProcess.stop(serverIdOf(req), { force: (req.body || {}).force !== false })))
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    adminlog.note(serverId, 'сервер', 'остановка сервера из панели');
+    res.json(await serverProcess.stop(serverId, { force: (req.body || {}).force !== false }));
+  })
 );
 
 router.post(
@@ -727,6 +753,7 @@ router.post(
   wrap(async (req, res) => {
     const serverId = serverIdOf(req);
     const server = config.getServer(serverId);
+    adminlog.note(serverId, 'сервер', 'перезапуск сервера из панели');
 
     const job = jobs.run(
       { type: 'restart-server', title: `Перезапуск сервера «${server.name}»`, serverId },
@@ -829,10 +856,10 @@ router.get('/ingame', (req, res) => {
 router.post(
   '/ingame/say',
   wrap(async (req, res) => {
-    const result = await ingame.say(serverIdOf(req), (req.body || {}).text, {
-      label: 'проверка канала',
-      quiet: true
-    });
+    const serverId = serverIdOf(req);
+    const text = (req.body || {}).text;
+    const result = await ingame.say(serverId, text, { label: 'проверка канала', quiet: true });
+    if (result.sent) adminlog.note(serverId, 'сообщение', `в игру: ${String(text).slice(0, 200)}`);
     if (!result.sent) return res.status(400).json({ error: `Не отправлено: ${result.reason}` });
     res.json(result);
   })

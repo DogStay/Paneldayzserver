@@ -112,6 +112,7 @@ export const api = {
   /* Подложка карты: тайлы отдаёт сама панель, кэшируя их на диске */
   map: () => request('GET', '/map'),
   clearMapTiles: (all) => request('DELETE', `/map/tiles${all ? '?all=1' : ''}`),
+  testMapTiles: (layer) => request('POST', '/map/test', { layer }),
 
   missions: () => request('GET', '/missions'),
   selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
@@ -135,6 +136,7 @@ export const api = {
     return request('GET', `/events${qs ? `?${qs}` : ''}`);
   },
   eventsSummary: (hours) => request('GET', `/events/summary${hours ? `?hours=${hours}` : ''}`),
+  adminlog: () => request('GET', '/adminlog'),
 
   ingame: () => request('GET', '/ingame'),
   ingameSay: (text) => request('POST', '/ingame/say', { text }),

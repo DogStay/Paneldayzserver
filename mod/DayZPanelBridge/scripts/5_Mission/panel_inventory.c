@@ -17,7 +17,7 @@ class PanelInventory
         PanelBridgeConfig config = PanelBridge.Get().GetConfig();
         if (config && config.maxInventoryDepth > 0) maxDepth = config.maxInventoryDepth;
 
-        string json = "{" + PanelJson.KStr("id", player.PanelId());
+        string json = PanelJson.KStr("id", player.PanelId());
 
         EntityAI hands = player.GetItemInHands();
         if (hands) json += "," + PanelJson.KRaw("hands", ItemJson(hands, 0, maxDepth));
@@ -34,7 +34,7 @@ class PanelInventory
     /** Один предмет вместе со вложенными. */
     private static string ItemJson(EntityAI entity, int depth, int maxDepth)
     {
-        string json = "{" + PanelJson.KStr("class", entity.GetType());
+        string json = PanelJson.KStr("class", entity.GetType());
         json += "," + PanelJson.KNum("health", entity.GetHealth("", ""));
 
         ItemBase item = ItemBase.Cast(entity);

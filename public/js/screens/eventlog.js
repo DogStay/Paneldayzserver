@@ -23,8 +23,32 @@ const GROUPS = [
   { title: 'Действия', types: ['action', 'build', 'dismantle', 'placement'] },
   { title: 'Транспорт', types: ['vehicle_enter', 'vehicle_exit', 'vehicle_engine', 'vehicle_destroy'] },
   { title: 'Игроки', types: ['connect', 'spawn', 'disconnect', 'chat', 'unconscious', 'bleeding'] },
-  { title: 'Панель', types: ['admin', 'server'] }
+  { title: 'Админы', types: ['admin', 'server'] }
 ];
+
+/**
+ * Строка о действиях админов.
+ *
+ * Панель пишет в журнал свои команды сама, а спавн и телепорты из VPPAdminTools
+ * читает из его логов — если их не видно, это надо сказать прямо, иначе журнал
+ * выглядит полным, хотя половины действий в нём нет.
+ */
+async function renderAdminLog() {
+  const node = paneRef && paneRef.querySelector('#ev-adminlog');
+  if (!node) return;
+
+  let status;
+  try {
+    status = await api.adminlog();
+  } catch (_) {
+    return;
+  }
+
+  node.innerHTML = status.reason
+    ? `Действия админов из игры: ${esc(status.reason)}`
+    : `Действия админов из VPPAdminTools читаются: <span class="inline-code">${esc(status.file)}</span>.
+       Команды самой панели попадают в журнал сразу.`;
+}
 
 export function initEventLogTab(pane) {
   paneRef = pane;
@@ -131,6 +155,8 @@ function renderShell() {
         <span class="small faint" id="ev-count">—</span>
       </div>
 
+      <div class="hint" id="ev-adminlog" style="margin-bottom:10px"></div>
+
       <div class="ev-list" id="ev-rows"></div>
 
       <div class="row" style="margin-top:14px">
@@ -145,6 +171,8 @@ function renderShell() {
       </div>
       <div id="ev-summary"><div class="small faint">—</div></div>
     </div>`;
+
+  renderAdminLog();
 
   paneRef.querySelector('#ev-live').addEventListener('change', (e) => {
     live = e.currentTarget.checked;

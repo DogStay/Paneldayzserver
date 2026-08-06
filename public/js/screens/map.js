@@ -245,6 +245,7 @@ async function loadTiles() {
       maxZoom: info.maxZoom,
       tileSize: info.tileSize,
       reason: info.reason,
+      lastError: info.tiles.hasSource ? info.lastError : '',
       cache: info.cache
     };
   } catch (_) {
@@ -274,6 +275,14 @@ function renderSource() {
     return;
   }
 
+  // Источник отказал — молчать нельзя: пустая карта выглядит как поломка панели.
+  if (info.lastError) {
+    node.innerHTML =
+      `<span style="color:var(--err,#e5484d)">Тайлы не приходят: ${esc(info.lastError)}.</span>` +
+      ' Настройки сервера → «Подложка карты» → «Проверить источник» покажет адрес и точную причину.';
+    return;
+  }
+
   const cached = info.cache && info.cache.files ? info.cache : null;
   node.innerHTML =
     `${esc(info.attribution || '')} · тайлы кэшируются на этой машине` +
@@ -293,12 +302,27 @@ function tileImage(layer, z, x, y) {
     tiles.set(key, image);
     scheduleDraw();
   };
-  // Пустой тайл (край карты, дальний зум) — не ошибка, просто больше не просим.
-  image.onerror = () => tiles.set(key, 'missing');
+  image.onerror = () => {
+    // Отдельный тайл может отсутствовать законно (край карты, дальний зум).
+    // Но если не пришёл ни один, причину надо показать — спрашиваем панель.
+    tiles.set(key, 'missing');
+    if (![...tiles.values()].some((v) => v !== 'missing' && v !== 'loading')) refreshSource();
+  };
 
   const server = activeServer();
   image.src = `/api/map/tiles/${layer}/${z}/${x}/${y}${server ? `?serverId=${encodeURIComponent(server.id)}` : ''}`;
   return null;
+}
+
+let sourceCheckedAt = 0;
+
+/** Переспросить панель о состоянии подложки — не чаще раза в 10 секунд. */
+async function refreshSource() {
+  if (Date.now() - sourceCheckedAt < 10_000) return;
+  sourceCheckedAt = Date.now();
+
+  await loadTiles();
+  renderSource();
 }
 
 /** Перерисовка не на каждый догруженный тайл, а раз в кадр. */
@@ -1144,8 +1168,15 @@ export function eventText(event) {
       return `${who} ${d.state ? 'потерял сознание' : 'пришёл в себя'}`;
     case 'bleeding':
       return `${who}: кровотечение ${d.state ? 'началось' : 'остановлено'}`;
-    case 'admin':
-      return `команда ${d.command || '—'}: ${d.ok ? 'выполнена' : `ошибка — ${d.error || ''}`}`;
+    case 'admin': {
+      // Из VPPAdminTools приходит готовая строка, от панели — команда моду.
+      if (d.source === 'vpp') return `${who} — ${d.phrase || d.text || d.action || 'действие'}`;
+
+      const label = d.action || d.command || 'команда';
+      const result = d.ok === false ? `ошибка — ${d.error || ''}` : 'выполнена';
+      const on = target ? ` (${target})` : '';
+      return d.text ? `панель: ${d.text}` : `панель, ${label}${on}: ${result}`;
+    }
     case 'server':
       return d.message || 'событие сервера';
     default:

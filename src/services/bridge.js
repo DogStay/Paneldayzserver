@@ -194,14 +194,20 @@ function warnOnce(serverId, message) {
   logger.warn(SOURCE, message, { serverId });
 }
 
+/** Последняя ошибка разбора — чтобы объяснить, чем именно файл плох. */
+let lastParseError = '';
+
 function readJson(file) {
+  lastParseError = '';
   try {
     const text = fs.readFileSync(file, 'utf8');
     if (!text.trim()) return null;
     return JSON.parse(text);
-  } catch (_) {
-    // Мод пишет через .tmp + копирование, но на всякий случай: битый или
-    // недописанный файл просто пропускаем — на следующем тике будет целый.
+  } catch (err) {
+    // Мод пишет через .tmp + копирование, поэтому недописанный файл — редкость,
+    // и почти всегда это ошибка в JSON от мода. Причину сохраняем: без неё
+    // «битый файл» ни о чём не говорит, а искать её в моде долго.
+    lastParseError = err.message;
     return null;
   }
 }
@@ -396,10 +402,24 @@ function readEvents(serverId) {
     if (!chunk) {
       // Недописанный файл оставляем до следующего тика; битый (лежит давно) —
       // убираем, иначе он будет мешать вечно.
+      const reason = lastParseError;
       try {
         if (Date.now() - fs.statSync(file).mtimeMs > 30_000) {
-          fs.rmSync(file, { force: true });
-          logger.warn(SOURCE, `Битый файл событий удалён: ${name}`, { serverId });
+          // Копию оставляем рядом: по ней видно, какое именно событие мод
+          // собрал неправильно. Одна копия на файл, места это не занимает.
+          const broken = `${file}.bad`;
+          try {
+            fs.renameSync(file, broken);
+          } catch (_) {
+            fs.rmSync(file, { force: true });
+          }
+
+          logger.warn(
+            SOURCE,
+            `Мод прислал испорченный JSON (${name}): ${reason || 'не разобрался'}. ` +
+              'Пачка событий и ответы на команды из неё потеряны, файл сохранён как .bad',
+            { serverId }
+          );
         }
       } catch (_) {
         /* уже исчез */
@@ -429,10 +449,21 @@ function readEvents(serverId) {
     if (raw && raw.type === 'command_result') {
       const data = (raw.data && typeof raw.data === 'object' ? raw.data : {});
       resolveCommand(serverId, { data });
+      // Команда панели — тоже действие администратора, поэтому пишем её в
+      // журнал рядом с действиями из VPPAdminTools: искать надо в одном месте.
+      const entry = stateOf(serverId).lastCommand || {};
       forLog.push({
         ts: raw.ts,
         type: 'admin',
-        data: { command: data.action || '', ok: data.ok !== false, error: data.error || '' }
+        target: entry.targetId ? { id: entry.targetId, name: '' } : null,
+        data: {
+          source: 'panel',
+          action: data.action || entry.action || 'команда',
+          command: data.action || '',
+          ok: data.ok !== false,
+          error: data.error || '',
+          args: entry.args || null
+        }
       });
       continue;
     }
@@ -492,6 +523,7 @@ function command(serverId, action, args = {}) {
     }, COMMAND_TIMEOUT_MS);
 
     st.pending.set(id, { resolve, reject, timer: timer_, action: name });
+    st.lastCommand = { action: name, targetId: args && args.id ? String(args.id) : '', args };
     logger.info(SOURCE, `Команда моду: ${name} ${JSON.stringify(args)}`, { serverId });
   });
 }
