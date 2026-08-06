@@ -54,6 +54,7 @@ function scanLine(line) {
   const quotes = (code.match(/"/g) || []).length;
   if (quotes % 2 !== 0) problems.push('нечётное число кавычек — литерал не закрыт');
 
+
   for (const word of RESERVED) {
     const re = new RegExp(`\\b(string|int|float|bool|vector|auto)\\s+${word}\\b`);
     if (re.test(code)) problems.push(`«${word}» — ключевое слово Enforce, так называть переменную нельзя`);
@@ -71,6 +72,35 @@ function checkFile(file) {
     for (const problem of scanLine(line)) {
       problems.push({ line: index + 1, text: line.trim().slice(0, 90), problem });
     }
+  });
+
+  /*
+   * Многострочный вызов, у которого закрывающая скобка стоит на отдельной
+   * строке: во всех ванильных скриптах последний аргумент перед такой скобкой
+   * заканчивается запятой. Без неё парсер считает вызов законченным и ругается
+   * «Invalid statement ')'» — именно это уронило сборку 1.0.1.
+   */
+  lines.forEach((line, index) => {
+    if (!/^\s*\)/.test(line)) return;
+
+    let previous = '';
+    for (let i = index - 1; i >= 0; i--) {
+      const candidate = lines[i].replace(/\/\/.*$/, '').trimEnd();
+      if (candidate.trim() === '') continue;
+      previous = candidate;
+      break;
+    }
+
+    // Открывающая скобка на предыдущей строке — аргументов нет вовсе, это норма.
+    if (!previous || previous.endsWith(',') || previous.endsWith('(')) return;
+
+    problems.push({
+      line: index + 1,
+      text: lines[index].trim().slice(0, 90),
+      problem:
+        'закрывающая скобка на отдельной строке, а последний аргумент выше не заканчивается запятой — ' +
+        'парсер Enforce даёт «Invalid statement». Поставьте запятую или соберите вызов в одну строку'
+    });
   });
 
   // Баланс фигурных скобок по файлу целиком: пропущенная скобка даёт ошибку

@@ -114,7 +114,7 @@ class PanelBridge
     static const string SNAPSHOT_FILE = "$profile:panel/snapshot.json";
 
     static const int PROTOCOL = 1;
-    static const string MOD_VERSION = "1.0.1";
+    static const string MOD_VERSION = "1.0.2";
 
     private static ref PanelBridge s_Instance;
 
@@ -197,9 +197,9 @@ class PanelBridge
         WriteHello(worldName, worldSize, mission, maxPlayers);
         Log("мост запущен, папка обмена: " + DIR);
 
-        string startData = PanelJson.Obj(
-            PanelJson.KStr("message", "мод-мост запущен") + "," + PanelJson.KStr("level", "info")
-        );
+        string startBody = PanelJson.KStr("message", "мод-мост запущен");
+        startBody += "," + PanelJson.KStr("level", "info");
+        string startData = PanelJson.Obj(startBody);
         Event("server", "", "", vector.Zero, startData);
     }
 
@@ -245,10 +245,9 @@ class PanelBridge
 
     private void WriteHello(string worldName, int worldSize, string mission, int maxPlayers)
     {
-        string features = PanelJson.Arr(
-            PanelJson.Str("events") + "," + PanelJson.Str("snapshot") + "," +
-            PanelJson.Str("commands") + "," + PanelJson.Str("inventory")
-        );
+        string featureList = PanelJson.Str("events") + "," + PanelJson.Str("snapshot");
+        featureList += "," + PanelJson.Str("commands") + "," + PanelJson.Str("inventory");
+        string features = PanelJson.Arr(featureList);
 
         string body = PanelJson.KInt("v", 1);
         body += "," + PanelJson.KInt("protocol", PROTOCOL);

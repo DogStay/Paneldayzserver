@@ -67,9 +67,9 @@ class PanelCommands extends PanelCommandHandler
         ref array<Man> players = new array<Man>;
         GetGame().GetPlayers(players);
 
-        resultJson = PanelJson.Obj(
-            PanelJson.KBool("pong", true) + "," + PanelJson.KInt("playersOnline", players.Count())
-        );
+        string pong = PanelJson.KBool("pong", true);
+        pong += "," + PanelJson.KInt("playersOnline", players.Count());
+        resultJson = PanelJson.Obj(pong);
         return true;
     }
 
@@ -447,9 +447,9 @@ class PanelCommands extends PanelCommandHandler
             if (item) item.SetQuantity(args.quantity);
         }
 
-        resultJson = PanelJson.Obj(
-            PanelJson.KStr("class", args.itemClass) + "," + PanelJson.KVec("pos", pos)
-        );
+        string spawned = PanelJson.KStr("class", args.itemClass);
+        spawned += "," + PanelJson.KVec("pos", pos);
+        resultJson = PanelJson.Obj(spawned);
         return true;
     }
 
