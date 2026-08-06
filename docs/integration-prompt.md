@@ -325,6 +325,10 @@ GET  /api/battleye/players POST /api/battleye/command
 | `godmode` | `id`, `on` |
 | `kill` | `id` |
 | `spawn_object` | `itemClass`, `pos: [x, y, z]`, `quantity` |
+| `item_delete` / `item_quantity` / `item_health` | `net` (сетевой id предмета из ответа `inventory`), для двух последних ещё `value` |
+| `item_to_hands` / `item_to_ground` | `net` (+ `id` игрока для рук) |
+| `item_move` / `item_spawn` | `net` и `container` / `container`, `itemClass`, `quantity` |
+| `clear_inventory` | `id` |
 | `set_time` | `hour`, `minute` |
 | `set_weather` | `overcast`, `rain`, `fog`, `windForce` (0…1) |
 

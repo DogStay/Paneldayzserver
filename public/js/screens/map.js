@@ -275,6 +275,14 @@ function renderSource() {
     return;
   }
 
+  // Своя картинка важнее любых жалоб на тайлы: карта уже нарисована.
+  if (view.bg && (!info.enabled || info.lastError)) {
+    node.innerHTML =
+      'Подложка — своя картинка карты (загружена в панель или лежит в public/maps).' +
+      ' Тайлы из интернета для этой карты не используются.';
+    return;
+  }
+
   // Источник отказал — молчать нельзя: пустая карта выглядит как поломка панели.
   if (info.lastError) {
     node.innerHTML =
@@ -373,16 +381,28 @@ function loadBackground(world) {
   view.bgTried = name;
   view.bg = null;
 
-  return new Promise((resolve) => {
-    const image = new Image();
-    image.onload = () => {
-      view.bg = image;
-      draw();
-      resolve();
-    };
-    image.onerror = () => resolve();
-    image.src = `maps/${name}.jpg`;
-  });
+  const server = activeServer();
+  const query = server ? `?serverId=${encodeURIComponent(server.id)}` : '';
+
+  // Сначала картинка, загруженная в панель, потом файл, положенный руками.
+  const sources = [`/api/map/image${query}`, `maps/${name}.jpg`, `maps/${name}.png`];
+
+  const tryNext = (index) =>
+    new Promise((resolve) => {
+      if (index >= sources.length) return resolve();
+
+      const image = new Image();
+      image.onload = () => {
+        view.bg = image;
+        draw();
+        renderSource();
+        resolve();
+      };
+      image.onerror = () => tryNext(index + 1).then(resolve);
+      image.src = sources[index];
+    });
+
+  return tryNext(0);
 }
 
 /* ------------------------------------------------------------- отрисовка */
@@ -964,11 +984,13 @@ async function onAction(btn, player) {
   }
 
   if (act === 'inventory') {
-    return busy(btn, async () => {
+    const show = async () => {
       extra.innerHTML = '<div class="small faint">Запрашиваю инвентарь у сервера…</div>';
       const inv = await api.bridgeInventory(player.id);
-      extra.innerHTML = renderInventory(inv);
-    });
+      extra.innerHTML = renderInventory(inv, player);
+      bindInventory(extra.querySelector('.inv-box'), player, show);
+    };
+    return busy(btn, show);
   }
 
   if (act === 'logs') {
@@ -1037,31 +1059,139 @@ function openStatModal(player) {
 
 /* ------------------------------------------------------------- инвентарь */
 
-function renderInventory(inv) {
-  const item = (it, depth = 0) => `
-    <div class="inv-row" style="padding-left:${depth * 16}px">
+/**
+ * Инвентарь с правкой.
+ *
+ * Предметы адресуются сетевым id от мода («low:high»), а не именем класса: у
+ * игрока может быть пять одинаковых банок, и удалить нужно ту, на которую нажали.
+ * Каждое действие — команда моду, после неё список перечитывается.
+ */
+function renderInventory(inv, player) {
+  const row = (it, depth = 0) => `
+    <div class="inv-row" style="padding-left:${depth * 16}px" data-net="${esc(it.net || '')}">
       <span class="inv-name">${esc(it.class || '—')}</span>
-      ${it.slot ? `<span class="badge">${esc(it.slot)}</span>` : ''}
-      ${it.container ? `<span class="badge">${esc(it.container)}</span>` : ''}
       ${it.quantity !== undefined && it.quantity !== null ? `<span class="small faint">× ${esc(String(it.quantity))}</span>` : ''}
       ${it.health !== undefined ? `<span class="small faint">${Math.round(it.health)}%</span>` : ''}
+      ${it.container ? '<span class="badge">есть место внутри</span>' : ''}
+      ${
+        it.net
+          ? `<span class="spacer"></span>
+             <button class="btn btn-sm" data-item="hands" title="Взять в руки">в руки</button>
+             <button class="btn btn-sm" data-item="ground" title="Выбросить на землю">на землю</button>
+             <button class="btn btn-sm" data-item="quantity" title="Изменить количество">× N</button>
+             <button class="btn btn-sm" data-item="health" title="Изменить прочность">%</button>
+             ${it.container ? '<button class="btn btn-sm" data-item="spawn" title="Создать предмет внутри">+ вещь</button>' : ''}
+             <button class="btn btn-sm btn-danger" data-item="delete" title="Удалить предмет">${icon('trash')}</button>`
+          : ''
+      }
     </div>
-    ${(it.children || []).map((child) => item(child, depth + 1)).join('')}`;
+    ${(it.children || []).map((child) => row(child, depth + 1)).join('')}`;
 
   const section = (title, items) =>
     items && items.length
-      ? `<div class="card-sub mb" style="margin-top:10px">${title}</div>${items.map((it) => item(it)).join('')}`
+      ? `<div class="card-sub mb" style="margin-top:10px">${title}</div>${items.map((it) => row(it)).join('')}`
       : '';
 
+  const empty = !inv.hands && !(inv.clothing || []).length && !(inv.cargo || []).length;
+
   return `
-    <div class="inv-box">
-      ${inv.hands ? `<div class="card-sub mb">В руках</div>${item(inv.hands)}` : ''}
+    <div class="inv-box" data-player="${esc(player ? player.id : '')}" data-player-net="${esc(inv.net || '')}">
+      <div class="row wrap mb" style="gap:8px">
+        <button class="btn btn-sm" data-inv="refresh">${icon('refresh')} Обновить</button>
+        <button class="btn btn-sm" data-inv="give">${icon('plus')} Выдать предмет</button>
+        <span class="spacer"></span>
+        <button class="btn btn-sm btn-danger" data-inv="clear">${icon('trash')} Очистить всё</button>
+      </div>
+
+      ${inv.hands ? `<div class="card-sub mb">В руках</div>${row(inv.hands)}` : ''}
       ${section('Одежда и снаряжение', inv.clothing)}
       ${section('В сумках и карманах', inv.cargo)}
-      ${!inv.hands && !(inv.clothing || []).length && !(inv.cargo || []).length
-        ? '<div class="small faint">Инвентарь пуст.</div>'
-        : ''}
+      ${empty ? '<div class="small faint">Инвентарь пуст.</div>' : ''}
     </div>`;
+}
+
+/** Кнопки инвентаря: одна привязка на весь блок, вместо десятков обработчиков. */
+function bindInventory(box, player, reload) {
+  if (!box) return;
+
+  const send = async (action, args, done) => {
+    await api.bridgeCommand(action, args);
+    toast(done, 'ok');
+    await reload();
+  };
+
+  box.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-item], button[data-inv]');
+    if (!button) return;
+
+    const whole = button.dataset.inv;
+    const action = button.dataset.item;
+    const rowEl = button.closest('.inv-row');
+    const net = rowEl ? rowEl.dataset.net : '';
+
+    if (whole === 'refresh') return void busy(button, reload);
+
+    if (whole === 'clear') {
+      return void confirmDialog({
+        title: 'Очистить инвентарь?',
+        message: `У игрока «${esc(player.name)}» будут удалены все вещи, включая то, что в руках.
+                  Отменить это нельзя.`,
+        confirmText: 'Очистить',
+        danger: true
+      }).then((ok) => {
+        if (ok) busy(button, () => send('clear_inventory', { id: player.id }, 'Инвентарь очищен'));
+      });
+    }
+
+    if (whole === 'give') {
+      return void askText({
+        title: 'Выдать предмет',
+        subtitle: 'Класс из игры, например SKS или TacticalBaconOpen',
+        label: 'Класс предмета',
+        confirmText: 'Выдать',
+        onSubmit: (cls) => send('give_item', { id: player.id, itemClass: cls, where: 'inventory' }, `Выдан ${cls}`)
+      });
+    }
+
+    if (!net) return;
+
+    if (action === 'delete') {
+      return void busy(button, () => send('item_delete', { net }, 'Предмет удалён'));
+    }
+    if (action === 'hands') {
+      return void busy(button, () => send('item_to_hands', { net, id: player.id }, 'Предмет в руках'));
+    }
+    if (action === 'ground') {
+      return void busy(button, () => send('item_to_ground', { net }, 'Предмет выброшен'));
+    }
+
+    if (action === 'quantity' || action === 'health') {
+      const isQuantity = action === 'quantity';
+      return void askText({
+        title: isQuantity ? 'Количество' : 'Прочность',
+        label: isQuantity ? 'Сколько (патроны, литры, штуки)' : 'Прочность в процентах, 0…100',
+        confirmText: 'Применить',
+        onSubmit: (value) => {
+          const number = Number(String(value).replace(',', '.'));
+          if (!Number.isFinite(number)) {
+            toast('Нужно число', 'err');
+            return Promise.resolve();
+          }
+          return send(isQuantity ? 'item_quantity' : 'item_health', { net, value: number }, 'Готово');
+        }
+      });
+    }
+
+    if (action === 'spawn') {
+      return void askText({
+        title: 'Создать предмет внутри',
+        subtitle: 'Предмет появится прямо в этой сумке или кармане',
+        label: 'Класс предмета',
+        confirmText: 'Создать',
+        onSubmit: (cls) => send('item_spawn', { container: net, itemClass: cls }, `Создан ${cls}`)
+      });
+    }
+  });
 }
 
 /* -------------------------------------------------------- события игрока */

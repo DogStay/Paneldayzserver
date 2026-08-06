@@ -18,6 +18,7 @@ class PanelInventory
         if (config && config.maxInventoryDepth > 0) maxDepth = config.maxInventoryDepth;
 
         string json = PanelJson.KStr("id", player.PanelId());
+        json += "," + PanelJson.KStr("net", PanelItems.NetOf(player));
 
         EntityAI hands = player.GetItemInHands();
         if (hands) json += "," + PanelJson.KRaw("hands", ItemJson(hands, 0, maxDepth));
@@ -35,7 +36,11 @@ class PanelInventory
     private static string ItemJson(EntityAI entity, int depth, int maxDepth)
     {
         string json = PanelJson.KStr("class", entity.GetType());
+        // Сетевой id: по нему панель адресует именно этот предмет, а не любой
+        // такой же по классу.
+        json += "," + PanelJson.KStr("net", PanelItems.NetOf(entity));
         json += "," + PanelJson.KNum("health", entity.GetHealth("", ""));
+        json += "," + PanelJson.KBool("container", HasSpaceInside(entity));
 
         ItemBase item = ItemBase.Cast(entity);
         if (item) json += "," + PanelJson.KNum("quantity", item.GetQuantity());
@@ -55,6 +60,15 @@ class PanelInventory
 
         json += "," + PanelJson.KRaw("children", PanelJson.Arr(children));
         return PanelJson.Obj(json);
+    }
+
+    /** Можно ли что-то положить внутрь: у сумки и разгрузки — да, у банки — нет. */
+    private static bool HasSpaceInside(EntityAI entity)
+    {
+        GameInventory inventory = entity.GetInventory();
+        if (!inventory) return false;
+
+        return inventory.GetCargo() != null;
     }
 
     /** Вложения (надетое, прикрученное к оружию). */

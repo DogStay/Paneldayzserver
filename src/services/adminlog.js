@@ -37,6 +37,9 @@ const POLL_MS = 3000;
 /** За раз разбираем не больше — чтобы огромный файл не съел память. */
 const MAX_CHUNK = 512 * 1024;
 
+/** Сколько хвоста читать у файла, который увидели впервые. */
+const FIRST_READ_BYTES = 128 * 1024;
+
 const STATE_FILE = path.join(__dirname, '..', '..', 'data', 'adminlog-state.json');
 
 /** serverId -> {file, offset} */
@@ -50,33 +53,60 @@ function loggingDir(serverId) {
   return path.join(config.profilesPath(config.active(serverId)), 'VPPAdminTools', 'Logging');
 }
 
+/**
+ * Поиск файлов логов VPP.
+ *
+ * Обычное место — <профиль>/VPPAdminTools/Logging, но сборок VPP много (у людей
+ * стоят и форки), поэтому если там ничего нет, обходим профиль целиком и берём
+ * всё, что похоже на Log_*.txt внутри папок с «VPP» в названии. Глубина
+ * ограничена: в профиле лежат ещё и логи сервера на гигабайты.
+ */
+const SEARCH_DEPTH = 4;
+
+function findLogs(serverId) {
+  const root = path.join(config.profilesPath(config.active(serverId)));
+  const found = [];
+
+  const walk = (dir, depth) => {
+    if (depth > SEARCH_DEPTH) return;
+
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+        continue;
+      }
+
+      if (!/^Log_.*\.txt$/i.test(entry.name)) continue;
+      // Отсекаем случайные Log_*.txt вне папок VPP.
+      if (!/vpp/i.test(dir)) continue;
+
+      try {
+        const stat = fs.statSync(full);
+        found.push({ file: full, mtime: stat.mtimeMs, size: stat.size });
+      } catch (_) {
+        /* исчез */
+      }
+    }
+  };
+
+  walk(root, 0);
+  found.sort((a, b) => b.mtime - a.mtime);
+  return found;
+}
+
 /** Самый свежий файл логов VPP: он создаёт новый при каждом запуске сервера. */
 function newestLog(serverId) {
-  const dir = loggingDir(serverId);
-
-  let names;
-  try {
-    names = fs.readdirSync(dir).filter((name) => /^Log_.*\.txt$/i.test(name));
-  } catch (_) {
-    return '';
-  }
-  if (!names.length) return '';
-
-  let best = '';
-  let bestTime = -1;
-  for (const name of names) {
-    try {
-      const time = fs.statSync(path.join(dir, name)).mtimeMs;
-      if (time > bestTime) {
-        bestTime = time;
-        best = name;
-      }
-    } catch (_) {
-      /* исчез между чтением каталога и статистикой */
-    }
-  }
-
-  return best ? path.join(dir, best) : '';
+  const list = findLogs(serverId);
+  return list.length ? list[0].file : '';
 }
 
 /* ---------------------------------------------------------------- разбор */
@@ -217,6 +247,24 @@ function saveState() {
   }
 }
 
+/** Ближайшее начало строки после offset — иначе разберём половину записи. */
+function nextLineStart(file, offset, size) {
+  const length = Math.min(4096, size - offset);
+  if (length <= 0) return offset;
+
+  try {
+    const handle = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(length);
+    fs.readSync(handle, buffer, 0, length, offset);
+    fs.closeSync(handle);
+
+    const at = buffer.indexOf(0x0a);
+    return at < 0 ? offset : offset + at + 1;
+  } catch (_) {
+    return offset;
+  }
+}
+
 function tail(serverId) {
   const file = newestLog(serverId);
   if (!file) return 0;
@@ -231,15 +279,19 @@ function tail(serverId) {
   const state = offsets[serverId] || {};
   let offset = state.file === file ? Number(state.offset) || 0 : -1;
 
-  // Новый файл: с прежним разобрались, этот начинаем читать с начала. Но самый
-  // первый файл при запуске панели пропускаем — историю в журнал не тянем.
-  if (offset < 0) {
-    const first = !state.file;
-    offset = first ? size : 0;
-  }
+  /*
+   * Файл видим впервые. Начинать с конца нельзя: журнал остался бы пустым до
+   * первого нового действия админа, и выглядело бы это как «ничего не работает».
+   * Поэтому подхватываем хвост — последние FIRST_READ_BYTES, этого хватает на
+   * несколько сотен последних действий, а всю историю сервера не тянем.
+   */
+  if (offset < 0) offset = Math.max(0, size - FIRST_READ_BYTES);
 
   // Файл укоротился (пересоздали с тем же именем) — читаем с начала.
   if (offset > size) offset = 0;
+
+  // С середины строки начинать нельзя: сдвигаемся к началу следующей.
+  if (offset > 0 && state.file !== file) offset = nextLineStart(file, offset, size);
 
   if (offset >= size) {
     offsets[serverId] = { file, offset: size };
@@ -317,20 +369,38 @@ function note(serverId, action, text, extra = {}) {
 
 function status(serverId) {
   const dir = loggingDir(serverId);
-  const file = newestLog(serverId);
+  const profile = config.profilesPath(config.active(serverId));
+  const list = findLogs(serverId);
   const state = offsets[serverId] || {};
 
   return {
     dir,
-    installed: fs.existsSync(dir),
-    file: file ? path.basename(file) : '',
+    profile,
+    installed: list.length > 0,
+    file: list.length ? path.basename(list[0].file) : '',
+    path: list.length ? list[0].file : '',
     offset: Number(state.offset) || 0,
-    reason: fs.existsSync(dir)
-      ? file
-        ? ''
-        : 'папка логов VPPAdminTools есть, но файлов пока нет — сервер запускался с этим модом?'
-      : `логов VPPAdminTools нет в ${dir}: мод не установлен или ведёт логи в другом профиле`
+    // Все найденные файлы: по ним видно, туда ли смотрит панель.
+    found: list.slice(0, 10).map((item) => ({
+      file: item.file,
+      size: item.size,
+      changedAt: Math.round(item.mtime)
+    })),
+    reason: list.length
+      ? ''
+      : `логи VPPAdminTools не найдены. Панель искала файлы Log_*.txt в папках с «VPP» внутри ${profile} ` +
+        '(до 4 уровней). Проверьте, что путь к профилю в настройках сервера совпадает с -profiles= в строке запуска'
   };
+}
+
+/** Забыть место чтения и перечитать хвост логов заново. */
+function rescan(serverId) {
+  delete offsets[serverId];
+  const added = tail(serverId);
+  saveState();
+
+  logger.info(SOURCE, `Перечитал админ-логи: добавлено событий ${added}`, { serverId });
+  return { added, ...status(serverId) };
 }
 
 function start() {
@@ -355,4 +425,4 @@ function stop() {
   saveState();
 }
 
-module.exports = { start, stop, status, note, parseLine, actionOf, phraseOf, timestampOf };
+module.exports = { start, stop, status, rescan, findLogs, note, parseLine, actionOf, phraseOf, timestampOf };

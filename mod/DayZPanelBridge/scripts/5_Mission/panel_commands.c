@@ -31,6 +31,14 @@ class PanelCommands extends PanelCommandHandler
             case "godmode": return GodMode(args, error);
             case "kill": return Kill(args, error);
             case "spawn_object": return SpawnObject(args, resultJson, error);
+            case "item_delete": return PanelItems.DeleteItem(args.net, error);
+            case "item_quantity": return PanelItems.SetItemQuantity(args.net, args.value, error);
+            case "item_health": return PanelItems.SetItemHealth(args.net, args.value, error);
+            case "item_to_hands": return PanelItems.MoveToHands(args.net, Find(args.id), error);
+            case "item_to_ground": return PanelItems.MoveToGround(args.net, error);
+            case "item_move": return PanelItems.MoveInto(args.net, args.container, error);
+            case "item_spawn": return PanelItems.SpawnInto(args.container, args.itemClass, args.quantity, resultJson, error);
+            case "clear_inventory": return PanelItems.StripAll(Find(args.id), resultJson, error);
             case "set_time": return SetTime(args, error);
             case "set_weather": return SetWeather(args, error);
             case "save_world":

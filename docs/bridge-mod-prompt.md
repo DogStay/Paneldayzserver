@@ -342,6 +342,14 @@ deerisle 16384; неизвестный мир — 15360.
 | `godmode` | `id`, `on` (bool) | неуязвимость |
 | `kill` | `id` | убить персонажа |
 | `spawn_object` | `class`, `pos`, `quantity` (необязательно) | спавн объекта в мире |
+| `item_delete` | `net` | удалить конкретный предмет |
+| `item_quantity` | `net`, `value` | количество: патроны, литры, штуки |
+| `item_health` | `net`, `value` | прочность 0…100 |
+| `item_to_hands` | `net`, `id` | взять предмет в руки игроку |
+| `item_to_ground` | `net` | выбросить предмет на землю |
+| `item_move` | `net`, `container` | переложить внутрь другого предмета |
+| `item_spawn` | `container`, `itemClass`, `quantity` | создать предмет в сумке или кармане |
+| `clear_inventory` | `id` | убрать у игрока всё |
 | `set_time` | `hour`, `minute` (необязательно) | игровое время |
 | `set_weather` | `overcast`, `rain`, `fog`, `windForce` (все 0…1, необязательные) | погода |
 | `save_world` | — | принудительное сохранение мира |

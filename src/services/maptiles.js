@@ -398,6 +398,75 @@ function contentTypeOf(file) {
   return 'image/webp';
 }
 
+/* --------------------------------------------------- своя картинка карты */
+
+/**
+ * Одна картинка вместо тайлов.
+ *
+ * Тайл-серверы сообщества держат версию карты в адресе и удаляют старые версии
+ * (об этом прямо предупреждает dzmap), поэтому подложка из интернета может
+ * отвалиться в любой момент. Своя картинка этого лишена: панель скачивает её
+ * один раз, кладёт рядом с собой и дальше отдаёт с диска.
+ *
+ * Резать на тайлы не нужно — карта рисуется на холсте одним изображением.
+ */
+const IMAGE_ROOT = path.join(__dirname, '..', '..', 'data', 'maps');
+const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+
+function imageFile(world) {
+  const name = worldOf(world) || 'unknown';
+
+  try {
+    for (const entry of fs.readdirSync(IMAGE_ROOT)) {
+      if (entry.replace(/\.[^.]+$/, '') === name) return path.join(IMAGE_ROOT, entry);
+    }
+  } catch (_) {
+    /* папки ещё нет */
+  }
+  return '';
+}
+
+function imageInfo(world) {
+  const file = imageFile(world);
+  if (!file) return { exists: false };
+
+  try {
+    const stat = fs.statSync(file);
+    return { exists: true, file, bytes: stat.size, changedAt: Math.round(stat.mtimeMs) };
+  } catch (_) {
+    return { exists: false };
+  }
+}
+
+/** Скачать картинку карты по ссылке. */
+async function setImage(world, url) {
+  const address = String(url || '').trim();
+  if (!/^https?:\/\//i.test(address)) throw new Error('нужна ссылка, начинающаяся с http:// или https://');
+
+  const result = await enqueue(() => fetchUrl(address));
+  if (!looksLikeImage(result.body)) throw new Error('по ссылке не картинка (нужен PNG или JPEG)');
+  if (result.body.length > MAX_IMAGE_BYTES) throw new Error('картинка больше 64 МБ — возьмите поменьше');
+
+  const extension = /png/i.test(result.type) ? 'png' : /webp/i.test(result.type) ? 'webp' : 'jpg';
+  const file = path.join(IMAGE_ROOT, `${worldOf(world) || 'unknown'}.${extension}`);
+
+  // Старый файл мог быть с другим расширением — убираем, иначе останутся два.
+  const previous = imageFile(world);
+  if (previous && previous !== file) fs.rmSync(previous, { force: true });
+
+  fs.mkdirSync(IMAGE_ROOT, { recursive: true });
+  fs.writeFileSync(file, result.body);
+
+  logger.info(SOURCE, `Картинка карты сохранена: ${file} (${Math.round(result.body.length / 1024)} КБ)`);
+  return imageInfo(world);
+}
+
+function clearImage(world) {
+  const file = imageFile(world);
+  if (file) fs.rmSync(file, { force: true });
+  return { removed: Boolean(file) };
+}
+
 /* ------------------------------------------------------- проверка источника */
 
 /**
@@ -489,6 +558,7 @@ function status(world) {
       hasSource: Boolean(template)
     },
     cache: cacheStats(world),
+    image: imageInfo(world),
     lastError: (freshFailure(`${worldOf(world)}/${s.layer}`) || {}).reason || '',
     reason: reasonFor(entry, template, s)
   };
@@ -517,6 +587,10 @@ module.exports = {
   status,
   tile,
   test,
+  imageFile,
+  imageInfo,
+  setImage,
+  clearImage,
   cacheStats,
   clearCache
 };

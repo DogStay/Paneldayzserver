@@ -63,6 +63,10 @@ class PanelCommandArgs
     string stat;
     string itemClass;
     string reason;
+    /** Сетевой id предмета «low:high» — им панель адресует конкретную вещь. */
+    string net;
+    /** Куда положить: сетевой id контейнера (сумка, ящик, игрок). */
+    string container;
     float value;
     float delta;
     float quantity;
@@ -114,7 +118,7 @@ class PanelBridge
     static const string SNAPSHOT_FILE = "$profile:panel/snapshot.json";
 
     static const int PROTOCOL = 1;
-    static const string MOD_VERSION = "1.0.6";
+    static const string MOD_VERSION = "1.0.7";
 
     private static ref PanelBridge s_Instance;
 

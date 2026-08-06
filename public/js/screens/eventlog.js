@@ -45,9 +45,31 @@ async function renderAdminLog() {
   }
 
   node.innerHTML = status.reason
-    ? `Действия админов из игры: ${esc(status.reason)}`
-    : `Действия админов из VPPAdminTools читаются: <span class="inline-code">${esc(status.file)}</span>.
-       Команды самой панели попадают в журнал сразу.`;
+    ? `<span style="color:var(--warn,#f0b429)">Действия админов из игры не читаются.</span>
+       ${esc(status.reason)} <button class="btn btn-sm" id="ev-adminlog-rescan" type="button">Искать снова</button>`
+    : `Действия админов из VPPAdminTools читаются:
+       <span class="inline-code">${esc(status.path || status.file)}</span>
+       ${status.found && status.found.length > 1 ? `(файлов найдено: ${status.found.length})` : ''}.
+       Команды самой панели попадают в журнал сразу.
+       <button class="btn btn-sm" id="ev-adminlog-rescan" type="button">Перечитать</button>`;
+
+  const button = node.querySelector('#ev-adminlog-rescan');
+  if (button) {
+    button.addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const result = await api.adminlogRescan();
+        toast(
+          result.added
+            ? `Перечитано: добавлено записей ${result.added}`
+            : result.reason || 'Новых записей в логах VPP нет',
+          result.added ? 'ok' : 'info',
+          9000
+        );
+        await renderAdminLog();
+        await load();
+      })
+    );
+  }
 }
 
 export function initEventLogTab(pane) {

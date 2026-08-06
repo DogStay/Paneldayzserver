@@ -666,6 +666,9 @@ function worldOf(serverId) {
 /** Читаются ли логи VPPAdminTools и где они лежат. */
 router.get('/adminlog', (req, res) => res.json(adminlog.status(serverIdOf(req))));
 
+/** Перечитать логи VPP заново — если панель подключили после действий админов. */
+router.post('/adminlog/rescan', (req, res) => res.json(adminlog.rescan(serverIdOf(req))));
+
 router.get('/map', (req, res) => {
   const serverId = serverIdOf(req);
   res.json({ ...maptiles.status(worldOf(serverId)), maps: maptiles.catalogue() });
@@ -698,6 +701,30 @@ router.get(
     }
   })
 );
+
+/**
+ * Своя картинка карты вместо тайлов: надёжнее, чем чужой тайл-сервер, который
+ * меняет адреса версий. Отдаётся прямо с диска панели.
+ */
+router.get('/map/image', (req, res) => {
+  const file = maptiles.imageFile(worldOf(serverIdOf(req)));
+  if (!file) return res.status(404).json({ error: 'картинка карты не загружена' });
+
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(file);
+});
+
+router.post(
+  '/map/image',
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const info = await maptiles.setImage(worldOf(serverId), (req.body || {}).url);
+    adminlog.note(serverId, 'карта', 'загружена своя картинка карты');
+    res.json(info);
+  })
+);
+
+router.delete('/map/image', (req, res) => res.json(maptiles.clearImage(worldOf(serverIdOf(req)))));
 
 /** Скачать один тайл прямо сейчас и показать, что ответил источник. */
 router.post(

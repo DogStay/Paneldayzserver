@@ -113,6 +113,8 @@ export const api = {
   map: () => request('GET', '/map'),
   clearMapTiles: (all) => request('DELETE', `/map/tiles${all ? '?all=1' : ''}`),
   testMapTiles: (layer) => request('POST', '/map/test', { layer }),
+  setMapImage: (url) => request('POST', '/map/image', { url }),
+  clearMapImage: () => request('DELETE', '/map/image'),
 
   missions: () => request('GET', '/missions'),
   selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
@@ -137,6 +139,7 @@ export const api = {
   },
   eventsSummary: (hours) => request('GET', `/events/summary${hours ? `?hours=${hours}` : ''}`),
   adminlog: () => request('GET', '/adminlog'),
+  adminlogRescan: () => request('POST', '/adminlog/rescan', {}),
 
   ingame: () => request('GET', '/ingame'),
   ingameSay: (text) => request('POST', '/ingame/say', { text }),

@@ -920,6 +920,21 @@ function bindTiles() {
         <div class="inline-code" style="word-break:break-all">${esc(t.template)}</div>
       </div>` : ''}
 
+      <div class="field" style="margin-top:12px">
+        <label>Своя картинка карты <span class="badge">надёжнее тайлов</span></label>
+        <div class="row" style="gap:8px">
+          <input type="text" id="tiles-image-url" placeholder="https://…/raman.jpg" style="flex:1;min-width:0"
+                 value="">
+          <button class="btn" id="tiles-image-load" type="button">Загрузить</button>
+          ${info.image && info.image.exists ? '<button class="btn" id="tiles-image-clear" type="button">Убрать</button>' : ''}
+        </div>
+        <div class="hint">${
+          info.image && info.image.exists
+            ? `Загружена картинка ${Math.round(info.image.bytes / 1024)} КБ — она рисуется под метками, тайлы не нужны.`
+            : 'Одна квадратная картинка карты целиком. Работает всегда: адреса версий у чужих тайл-серверов меняются, а файл на диске — нет.'
+        }</div>
+      </div>
+
       <div class="hint" style="margin-top:10px">${esc(t.attribution)}. Панель скачивает каждый тайл
         один раз и дальше отдаёт с диска — чужой сервер не нагружается, а карта работает без интернета.
         Свой адрес нужен для самодельных карт: поддерживается обычная схема
@@ -935,6 +950,28 @@ function bindTiles() {
         await render();
       })
     );
+
+    box.querySelector('#tiles-image-load').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const url = box.querySelector('#tiles-image-url').value.trim();
+        if (!url) return void toast('Вставьте ссылку на картинку', 'warn');
+
+        const result = await api.setMapImage(url);
+        toast(`Картинка карты загружена: ${Math.round(result.bytes / 1024)} КБ`, 'ok', 9000);
+        await render();
+      })
+    );
+
+    const clearImage = box.querySelector('#tiles-image-clear');
+    if (clearImage) {
+      clearImage.addEventListener('click', (e) =>
+        busy(e.currentTarget, async () => {
+          await api.clearMapImage();
+          toast('Картинка карты убрана', 'ok');
+          await render();
+        })
+      );
+    }
 
     box.querySelector('#tiles-url').addEventListener('change', (e) =>
       busy(e.currentTarget, async () => {
