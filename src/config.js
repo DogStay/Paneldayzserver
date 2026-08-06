@@ -168,6 +168,19 @@ function normalize(cfg) {
   c.panel.port = toInt(c.panel.port, 8787);
   c.panel.logBufferLines = toInt(c.panel.logBufferLines, 2000);
 
+  // Вход по мастер-ключам. "auto" — спрашивать, когда панель слушает не только
+  // 127.0.0.1: локальная работа не меняется, выставленная наружу защищена.
+  c.panel.auth = c.panel.auth || {};
+  if (c.panel.auth.enabled !== true && c.panel.auth.enabled !== false) c.panel.auth.enabled = 'auto';
+  c.panel.auth.keyCount = clamp(toInt(c.panel.auth.keyCount, 3), 1, 10);
+  c.panel.auth.sessionHours = clamp(toInt(c.panel.auth.sessionHours, 12), 1, 720);
+  c.panel.auth.trustProxy = Boolean(c.panel.auth.trustProxy);
+
+  c.panel.tls = c.panel.tls || {};
+  c.panel.tls.enabled = Boolean(c.panel.tls.enabled);
+  c.panel.tls.certFile = cleanPath(c.panel.tls.certFile);
+  c.panel.tls.keyFile = cleanPath(c.panel.tls.keyFile);
+
   // Тяжёлые моды рвутся по таймауту SteamCMD — эти два значения решают,
   // сколько раз панель попробует докачать и как долго ждать одну попытку.
   c.steam.downloadRetries = clamp(toInt(c.steam.downloadRetries, 5), 1, 30);

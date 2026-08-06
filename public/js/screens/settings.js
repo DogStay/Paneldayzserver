@@ -8,7 +8,7 @@
 
 import { api } from '../api.js';
 import { state, activeServer, announcementsOf, refreshConfig, refreshServers, refreshStatus } from '../store.js';
-import { esc, icon, toast, busy, modal, confirmDialog } from '../ui.js';
+import { esc, icon, toast, busy, modal, confirmDialog, fmtDate } from '../ui.js';
 
 let paneRef = null;
 
@@ -511,6 +511,17 @@ Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title-icon">${icon('key')}</span>
+        <div><h2>Доступ к панели</h2>
+          <div class="card-sub">Мастер-ключи и активные сессии</div></div>
+        <span class="spacer"></span>
+        <span class="small faint" id="auth-state">—</span>
+      </div>
+      <div id="auth-box"><div class="small faint">Читаю состояние входа…</div></div>
+    </div>
+
     <div class="row" style="position:sticky;bottom:52px;padding:14px 0;
          background:linear-gradient(to top,var(--bg-0) 60%,transparent)">
       <button class="btn btn-success btn-lg" id="set-save">${icon('save')} Сохранить настройки</button>
@@ -538,6 +549,7 @@ function bind(server) {
   paneRef.querySelector('#mission-pick').addEventListener('click', () => openMissionPicker());
   bindAnnouncements();
   bindIngame();
+  bindAuth();
 
   paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
@@ -628,6 +640,172 @@ function bind(server) {
       await load();
     })
   );
+}
+
+/* --------------------------------------------------------- доступ к панели */
+
+/**
+ * Мастер-ключи и сессии.
+ *
+ * Ключи живут только в памяти панели и печатаются в её окне при запуске. Здесь
+ * их можно посмотреть (чтобы передать второй ключ коллеге), выпустить заново и
+ * закрыть чужие сессии.
+ */
+function bindAuth() {
+  const box = paneRef.querySelector('#auth-box');
+  const stateEl = paneRef.querySelector('#auth-state');
+
+  const render = async () => {
+    let status;
+    try {
+      status = await api.authStatus();
+    } catch (err) {
+      box.innerHTML = `<div class="notice err"><span class="ic">${icon('alert')}</span><div>${esc(err.message)}</div></div>`;
+      return;
+    }
+
+    stateEl.textContent = status.required
+      ? `вход по ключу${status.https ? ', HTTPS' : ', без HTTPS'}`
+      : 'вход не требуется (только 127.0.0.1)';
+
+    if (!status.required) {
+      box.innerHTML = `
+        <div class="notice info"><span class="ic">${icon('info')}</span>
+          <div>Панель слушает <span class="inline-code">${esc(status.host)}</span> — она доступна только с этой
+          машины, поэтому вход не спрашивается.<br><br>
+          Чтобы открыть панель наружу: поставьте <span class="inline-code">panel.host</span> = 0.0.0.0,
+          перезапустите панель — вход по мастер-ключам включится сам, и ключи появятся в её окне.</div></div>`;
+      return;
+    }
+
+    const [keysData, sessionsData] = await Promise.all([
+      api.authKeys().catch(() => ({ keys: [] })),
+      api.authSessions().catch(() => ({ sessions: [] }))
+    ]);
+
+    box.innerHTML = `
+      ${status.https
+        ? ''
+        : `<div class="notice warn mb"><span class="ic">${icon('alert')}</span>
+            <div>Панель работает по HTTP: ключ и данные идут по сети открытым текстом. Для доступа из
+            интернета поставьте её за reverse-proxy с сертификатом (Caddy, nginx) либо укажите пути к
+            сертификату в <span class="inline-code">panel.tls</span> файла config.json.</div></div>`}
+
+      <div class="notice info mb"><span class="ic">${icon('key')}</span>
+        <div>Ключей ${status.keyCount}, сессия живёт ${status.sessionHours} ч.
+        Ключи <b>новые при каждом запуске панели</b> и нигде не сохраняются на диск.</div></div>
+
+      <div class="card-sub mb">Мастер-ключи</div>
+      <div class="mod-list mb">
+        ${keysData.keys
+          .map(
+            (k) => `
+              <div class="mod-row">
+                <div class="mod-thumb ph">${icon('key')}</div>
+                <div class="mod-main">
+                  <div class="mod-name" style="font-family:var(--mono);letter-spacing:.08em">${esc(k.key)}</div>
+                  <div class="mod-meta"><span>ключ №${k.index}</span></div>
+                </div>
+                <div class="mod-actions">
+                  <button class="btn btn-sm" data-copy="${esc(k.key)}">Скопировать</button>
+                </div>
+              </div>`
+          )
+          .join('')}
+      </div>
+
+      <div class="card-sub mb">Активные сессии</div>
+      <div class="mod-list mb">
+        ${sessionsData.sessions.length
+          ? sessionsData.sessions
+              .map(
+                (s) => `
+                  <div class="mod-row">
+                    <div class="mod-thumb ph">${icon('users')}</div>
+                    <div class="mod-main">
+                      <div class="mod-name">${esc(s.ip)}${s.current ? ' — это вы' : ''}</div>
+                      <div class="mod-meta">
+                        <span>ключ №${s.keyIndex}</span>
+                        <span>вход ${esc(fmtDate(s.createdAt))}</span>
+                        <span>до ${esc(fmtDate(s.expiresAt))}</span>
+                        ${s.agent ? `<span title="${esc(s.agent)}">${esc(s.agent.slice(0, 28))}…</span>` : ''}
+                      </div>
+                    </div>
+                    <div class="mod-actions">
+                      <button class="btn btn-sm btn-danger" data-close-session="${esc(s.id)}">
+                        ${s.current ? 'Выйти' : 'Закрыть'}</button>
+                    </div>
+                  </div>`
+              )
+              .join('')
+          : `<div class="small faint">Активных сессий нет.</div>`}
+      </div>
+
+      <div class="row wrap">
+        <button class="btn" id="auth-rotate" type="button">${icon('refresh')} Выпустить новые ключи</button>
+        <button class="btn btn-danger" id="auth-close-all" type="button">${icon('x')} Закрыть все сессии</button>
+      </div>`;
+
+    for (const btn of box.querySelectorAll('[data-copy]')) {
+      btn.addEventListener('click', async (e) => {
+        const key = e.currentTarget.dataset.copy;
+        try {
+          await navigator.clipboard.writeText(key);
+          toast('Ключ скопирован', 'ok');
+        } catch (_) {
+          toast(`Ключ: ${key}`, 'info', 12000);
+        }
+      });
+    }
+
+    for (const btn of box.querySelectorAll('[data-close-session]')) {
+      btn.addEventListener('click', (e) =>
+        busy(e.currentTarget, async () => {
+          const id = e.currentTarget.dataset.closeSession;
+          const mine = sessionsData.sessions.find((s) => s.id === id && s.current);
+
+          await api.authCloseSession(id);
+          if (mine) return (location.href = '/login.html');
+
+          toast('Сессия закрыта', 'ok');
+          await render();
+        })
+      );
+    }
+
+    box.querySelector('#auth-rotate').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const yes = await confirmDialog({
+          title: 'Выпустить новые ключи?',
+          message: `Старые ключи перестанут работать сразу. Уже открытые сессии останутся —
+            те, кто вошёл, продолжат работать.<br><br>Новые ключи появятся здесь и в окне панели.`,
+          confirmText: 'Выпустить'
+        });
+        if (!yes) return;
+
+        await api.authRotate();
+        toast('Ключи выпущены заново', 'ok');
+        await render();
+      })
+    );
+
+    box.querySelector('#auth-close-all').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const yes = await confirmDialog({
+          title: 'Закрыть все сессии?',
+          message: 'Все, кто сейчас в панели (включая вас), выйдут и будут вводить ключ заново.',
+          confirmText: 'Закрыть все',
+          danger: true
+        });
+        if (!yes) return;
+
+        await api.authCloseSession('all');
+        location.href = '/login.html';
+      })
+    );
+  };
+
+  render();
 }
 
 /* ------------------------------------------------------ сообщения в игру */

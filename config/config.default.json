@@ -2,7 +2,18 @@
   "panel": {
     "host": "127.0.0.1",
     "port": 8787,
-    "logBufferLines": 3000
+    "logBufferLines": 3000,
+    "auth": {
+      "enabled": "auto",
+      "keyCount": 3,
+      "sessionHours": 12,
+      "trustProxy": false
+    },
+    "tls": {
+      "enabled": false,
+      "certFile": "",
+      "keyFile": ""
+    }
   },
   "steam": {
     "username": "",

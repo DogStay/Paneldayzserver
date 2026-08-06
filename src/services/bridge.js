@@ -267,6 +267,9 @@ function normalizePlayer(raw) {
     energy: num(p.energy, -1),
     water: num(p.water, -1),
     temperature: num(p.temperature, -1),
+    // Движок отдаёт не «температуру тела», а комфорт по теплу: -1 замерзает,
+    // +1 перегрев. Панель показывает именно его.
+    heatComfort: num(p.heatComfort, 0),
     wet: num(p.wet),
     stamina: num(p.stamina, -1),
     bleeding: Boolean(p.bleeding),

@@ -8,6 +8,7 @@ import {
   refreshStatus, refreshConfig, refreshMods,
   activeServer, activeStatus
 } from './store.js';
+import { api } from './api.js';
 import { $, esc, icon, toast, modal, STATUS_LABEL } from './ui.js';
 
 import { initServersScreen, openWizard } from './screens/servers.js';
@@ -51,12 +52,23 @@ function renderTopbar() {
     <div class="topbar-actions">
       <button class="btn btn-sm" id="nav-new">${icon('plus')} Новый сервер</button>
       <button class="btn btn-sm btn-ghost btn-icon" id="nav-help" title="Помощь">${icon('info')}</button>
+      ${state.auth && state.auth.required
+        ? `<button class="btn btn-sm btn-ghost btn-icon" id="nav-logout" title="Выйти из панели">${icon('back')}</button>`
+        : ''}
     </div>`;
 
   $('#brand').addEventListener('click', () => navigate('servers'));
   $('#nav-servers').addEventListener('click', () => navigate('servers'));
   $('#nav-new').addEventListener('click', () => openWizard());
   $('#nav-help').addEventListener('click', showHelp);
+
+  const logout = document.getElementById('nav-logout');
+  if (logout) {
+    logout.addEventListener('click', async () => {
+      await api.authLogout().catch(() => {});
+      location.href = '/login.html';
+    });
+  }
 
   const chip = $('#nav-current');
   if (chip) chip.addEventListener('click', () => navigate('dashboard'));
@@ -150,6 +162,14 @@ async function init() {
   on('job', (job) => {
     if (job.status === 'running' && (job.type === 'install-server' || job.type === 'download-mods')) openConsole();
   });
+
+  // Кто мы такие: нужен ли вход и есть ли активная сессия. Делается до всего
+  // остального — иначе первые запросы улетят в 401 и покажут лишние ошибки.
+  try {
+    state.auth = await api.authStatus();
+  } catch (_) {
+    state.auth = { required: false };
+  }
 
   connectStream();
 

@@ -415,7 +415,9 @@ function renderCard(id) {
       ${stat('голод', Math.round(player.hunger), '%')}
       ${stat('жажда', Math.round(player.thirst), '%')}
       ${stat('выносливость', Math.round(player.stamina), '%')}
-      ${player.temperature >= 0 ? stat('температура', player.temperature.toFixed(1), '°') : ''}
+      ${player.heatComfort !== undefined && player.heatComfort !== null && player.heatComfort !== 0
+        ? stat('тепло', Math.round(player.heatComfort * 100), '%')
+        : ''}
     </div>
 
     ${player.hands || player.vehicle || player.bleeding || player.unconscious
@@ -498,7 +500,7 @@ async function onAction(btn, player) {
       confirmText: 'Выдать',
       hint: 'Например: AKM, Rice, BandageDressing, WaterBottle',
       onSubmit: async (cls) => {
-        await api.bridgeCommand('give_item', { id: player.id, class: cls, quantity: 1 });
+        await api.bridgeCommand('give_item', { id: player.id, itemClass: cls, quantity: 1 });
         toast(`Выдано: ${cls}`, 'ok');
       }
     });

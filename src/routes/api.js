@@ -32,6 +32,7 @@ const announcer = require('../services/announcer');
 const ingame = require('../services/ingame');
 const battleye = require('../services/battleye');
 const bridge = require('../services/bridge');
+const auth = require('../services/auth');
 const eventlog = require('../services/eventlog');
 
 const router = express.Router();
@@ -51,6 +52,49 @@ function serverIdOf(req) {
 }
 
 /* ------------------------------------------------------------------- статус */
+
+/* ------------------------------------------------------------------- вход */
+
+/*
+ * Эти маршруты работают до входа (см. PUBLIC_PATHS в services/auth.js), поэтому
+ * из них наружу не уходит ничего, кроме факта «вход нужен» и результата попытки.
+ */
+
+router.get('/auth/status', (req, res) => res.json(auth.status(req)));
+
+router.post('/auth/login', (req, res) => {
+  const result = auth.login(req, (req.body || {}).key);
+  if (!result.ok) return res.status(result.status || 401).json({ error: result.error });
+
+  res.setHeader('Set-Cookie', auth.cookieHeader(result.token, result.expiresAt));
+  res.json({ ok: true, keyIndex: result.keyIndex, expiresAt: result.expiresAt });
+});
+
+router.post('/auth/logout', (req, res) => {
+  auth.destroySession(req);
+  res.setHeader('Set-Cookie', auth.clearCookieHeader());
+  res.json({ ok: true });
+});
+
+/** Ключи текущего запуска — чтобы передать второй ключ коллеге. */
+router.get('/auth/keys', (req, res) => res.json({ keys: auth.listKeys(), issuedAt: auth.status(req).keysIssuedAt }));
+
+/** Выпустить новые ключи, не перезапуская панель. Открытые сессии остаются. */
+router.post('/auth/rotate', (req, res) => {
+  auth.generate('запрос из панели');
+  auth.announce();
+  res.json({ keys: auth.listKeys() });
+});
+
+/** Кто сейчас в панели. */
+router.get('/auth/sessions', (req, res) => {
+  const current = auth.sessionOf(req);
+  res.json({
+    sessions: auth.listSessions().map((s) => ({ ...s, current: current ? current.token.slice(0, 8) === s.id : false }))
+  });
+});
+
+router.delete('/auth/sessions/:id', (req, res) => res.json({ closed: auth.revoke(req.params.id) }));
 
 router.get(
   '/status',

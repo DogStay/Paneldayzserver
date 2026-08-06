@@ -27,6 +27,12 @@ async function request(method, url, body) {
     }
   }
 
+  // Сессия истекла или панель перезапустилась с новыми ключами — на страницу входа.
+  if (res.status === 401 && data && data.auth === 'required') {
+    if (!location.pathname.endsWith('/login.html')) location.href = '/login.html';
+    throw new Error('Требуется вход по мастер-ключу');
+  }
+
   if (!res.ok) throw new Error((data && data.error) || `Ошибка ${res.status}`);
   return data;
 }
@@ -39,6 +45,13 @@ export const api = {
   del: (url) => request('DELETE', url),
 
   /* Прикладные вызовы — чтобы экраны не собирали строки URL руками */
+  authStatus: () => request('GET', '/auth/status'),
+  authKeys: () => request('GET', '/auth/keys'),
+  authRotate: () => request('POST', '/auth/rotate', {}),
+  authSessions: () => request('GET', '/auth/sessions'),
+  authCloseSession: (id) => request('DELETE', `/auth/sessions/${encodeURIComponent(id)}`),
+  authLogout: () => request('POST', '/auth/logout', {}),
+
   status: () => request('GET', '/status'),
   config: () => request('GET', '/config'),
   saveConfig: (patch) => request('PUT', '/config', patch),

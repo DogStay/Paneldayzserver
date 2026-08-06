@@ -9,6 +9,9 @@
  * в config/config.json, понимая, что панель не имеет авторизации.
  */
 
+const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const path = require('path');
 const express = require('express');
 
@@ -20,6 +23,7 @@ const diagnostics = require('./services/diagnostics');
 const scheduler = require('./services/scheduler');
 const announcer = require('./services/announcer');
 const bridge = require('./services/bridge');
+const auth = require('./services/auth');
 
 const cfg = config.load();
 logger.setMaxLines(cfg.panel.logBufferLines);
@@ -28,6 +32,12 @@ const app = express();
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '4mb' }));
+
+// Вход по мастер-ключам. Стоит раньше API и статики: до входа наружу отдаются
+// только страница входа и сама проверка ключа.
+auth.start();
+app.use(auth.middleware());
+
 app.use('/api', api);
 
 app.use(
@@ -42,17 +52,48 @@ app.use((req, res) => res.status(404).json({ error: `Не найдено: ${req.
 const host = cfg.panel.host || '127.0.0.1';
 const port = cfg.panel.port || 8787;
 
-const httpServer = app.listen(port, host, () => {
+/**
+ * HTTPS, если в настройках указаны сертификат и ключ.
+ *
+ * Панель, открытая наружу по http://, отдаёт мастер-ключ и все данные открытым
+ * текстом. Поэтому либо reverse-proxy с сертификатом, либо этот путь.
+ */
+const tls = auth.tls();
+let httpServer;
+
+if (tls.enabled) {
+  try {
+    httpServer = https.createServer(
+      { cert: fs.readFileSync(tls.certFile), key: fs.readFileSync(tls.keyFile) },
+      app
+    );
+  } catch (err) {
+    logger.error('panel', `Не удалось прочитать сертификат (${err.message}) — панель поднимается по HTTP`);
+    httpServer = http.createServer(app);
+  }
+} else {
+  httpServer = http.createServer(app);
+}
+
+httpServer.listen(port, host, () => {
   const shown = host === '0.0.0.0' ? 'localhost' : host;
+  const scheme = tls.enabled && httpServer instanceof https.Server ? 'https' : 'http';
+
   logger.info('panel', '═'.repeat(60));
-  logger.info('panel', `DayZ Panel запущена: http://${shown}:${port}`);
+  logger.info('panel', `DayZ Panel запущена: ${scheme}://${shown}:${port}`);
   logger.info('panel', `Платформа: ${process.platform}, Node ${process.version}`);
   logger.info('panel', `Конфиг:    ${config.CONFIG_FILE}`);
   logger.info('panel', `Логи:      ${logger.currentFile()}`);
   logger.info('panel', `Отчёты:    ${diagnostics.ROOT}\\diagnostic-report-*.txt`);
 
-  if (host === '0.0.0.0') {
-    logger.warn('panel', 'Панель слушает все интерфейсы и не имеет пароля — не выставляйте её в интернет');
+  const authSettings = auth.settings();
+  if (host !== '127.0.0.1' && !authSettings.enabled) {
+    logger.warn(
+      'panel',
+      'Панель слушает сеть, а вход по мастер-ключам выключен — любой, кто знает адрес, получит полный доступ'
+    );
+  } else if (authSettings.enabled) {
+    logger.info('panel', 'Вход в панель: по мастер-ключу (ключи напечатаны выше)');
   }
   if (process.platform !== 'win32') {
     logger.warn('panel', 'Панель запущена не в Windows: netsh и запуск DayZServer_x64.exe работать не будут');
@@ -91,6 +132,7 @@ async function shutdown(signal) {
   scheduler.stop();
   announcer.stop();
   bridge.stop();
+  auth.stop();
   await serverProcess.shutdown();
   httpServer.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();

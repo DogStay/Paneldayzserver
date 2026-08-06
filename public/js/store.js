@@ -11,6 +11,7 @@ const listeners = new Map();
 
 export const state = {
   connected: false,
+  auth: null,
   panel: null,
   hasServers: false,
   activeServerId: null,
