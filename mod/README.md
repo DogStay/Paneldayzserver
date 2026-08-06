@@ -155,6 +155,7 @@ node ..\tools\check-enforce.js DayZPanelBridge
 |---|---|---|---|
 | 1.0.0 | `CParser: quoted string not closed` | литерал с экранированной кавычкой | кавычка, слэш и переводы строк строятся из ASCII-кодов (`int.AsciiToString()`); в исходниках нет ни одной escape-последовательности |
 | 1.0.1 | `Invalid statement ')'` | вызов, разбитый на строки, где последний аргумент без запятой перед `);` | вызовы держатся в одной строке; если переносить — последний аргумент тоже с запятой, как во всех ванильных скриптах |
+| 1.0.2 | `Broken expression (missing ';'?)` + `Can't compile "Game" script module!` | локальная переменная названа `event` — это ключевое слово Enforce (модификатор метода: `event protected void EOnTouch(...)`) | имена переменных проверяются по списку ключевых слов в `tools/check-enforce.js`; заодно исправлен тип `out`-параметра `FindFile`: `FileAttr`, а не `int` |
 
 **`hello.json` не появляется.** Мод не загрузился: проверьте, что папка
 `@DayZPanelBridge` лежит рядом с `DayZServer_x64.exe`, а в строке запуска стоит

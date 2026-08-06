@@ -114,7 +114,7 @@ class PanelBridge
     static const string SNAPSHOT_FILE = "$profile:panel/snapshot.json";
 
     static const int PROTOCOL = 1;
-    static const string MOD_VERSION = "1.0.2";
+    static const string MOD_VERSION = "1.0.3";
 
     private static ref PanelBridge s_Instance;
 
@@ -421,7 +421,7 @@ class PanelBridge
         if (!IsReady()) return;
 
         string name;
-        int attr;
+        FileAttr attr;
         FindFileHandle handle = FindFile(IN_DIR + "/*.json", name, attr, FindFileFlags.DIRECTORIES);
         if (!handle) return;
 
@@ -464,12 +464,12 @@ class PanelBridge
         if (!ok) body += "," + PanelJson.KStr("error", error);
         body += "," + PanelJson.KRaw("result", resultJson);
 
-        string event = PanelJson.KRaw("ts", Now());
-        event += "," + PanelJson.KStr("type", "command_result");
-        event += "," + PanelJson.KRaw("data", PanelJson.Obj(body));
+        string answer = PanelJson.KRaw("ts", Now());
+        answer += "," + PanelJson.KStr("type", "command_result");
+        answer += "," + PanelJson.KRaw("data", PanelJson.Obj(body));
 
         // Ответ на команду не подчиняется ограничителю частоты: панель его ждёт.
-        m_Buffer.Insert(PanelJson.Obj(event));
+        m_Buffer.Insert(PanelJson.Obj(answer));
         Flush();
     }
 
@@ -514,7 +514,7 @@ class PanelBridge
         if (!IsReady()) return;
 
         string name;
-        int attr;
+        FileAttr attr;
         FindFileHandle handle = FindFile(OUT_DIR + "/ev_*.json", name, attr, FindFileFlags.DIRECTORIES);
         if (!handle) return;
 

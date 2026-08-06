@@ -19,8 +19,27 @@
 const fs = require('fs');
 const path = require('path');
 
-/** Ключевые слова Enforce, которые нельзя использовать как имя переменной. */
-const RESERVED = ['out', 'inout', 'ref', 'proto', 'native', 'typedef', 'class', 'new', 'delete', 'owned'];
+/**
+ * Ключевые слова Enforce, которые нельзя использовать как имя переменной.
+ *
+ * Список сверен по дампу ванильных скриптов DayZ: ни одно из этих слов там ни
+ * разу не стоит на месте имени переменной. Из-за `event` (это модификатор
+ * метода: `event protected void EOnTouch(...)` в 1_core/proto/enentity.c)
+ * сборка 1.0.2 не компилировалась — «Broken expression (missing ';'?)».
+ *
+ * В списке только слова с прямым подтверждением: они либо встречаются в
+ * ванилле как ключевые, либо ни разу — как имена. Слова «на всякий случай» тут
+ * не нужны: например `spawn` выглядит служебным, но в ванилле это законное имя
+ * параметра (`OnEntityYieldSpawned(EntityAI spawn)`), и запрет дал бы ложную
+ * тревогу.
+ */
+const RESERVED = [
+  'event', 'out', 'inout', 'ref', 'proto', 'native', 'typedef', 'class', 'new', 'delete', 'owned',
+  'autoptr', 'notnull', 'typename', 'modded'
+];
+
+/** Модификаторы, которые могут стоять перед типом в объявлении. */
+const MODIFIERS = 'private|protected|static|const|ref|autoptr|override|proto|native|volatile|notnull|out|inout';
 
 function collect(dir) {
   const files = [];
@@ -55,9 +74,30 @@ function scanLine(line) {
   if (quotes % 2 !== 0) problems.push('нечётное число кавычек — литерал не закрыт');
 
 
+  /*
+   * Ключевое слово на месте имени. Два надёжных признака:
+   *   1) объявление «<тип> слово» — тип может быть встроенным, шаблонным или
+   *      именем класса, перед ним допустимы модификаторы;
+   *   2) использование «слово = …», «слово += …», «слово.Метод()».
+   * Само ключевое слово в роли типа (`ref array<int> x`, `modded class Foo`)
+   * под правило не попадает: тогда «типом» оказывается другое ключевое слово.
+   */
   for (const word of RESERVED) {
-    const re = new RegExp(`\\b(string|int|float|bool|vector|auto)\\s+${word}\\b`);
-    if (re.test(code)) problems.push(`«${word}» — ключевое слово Enforce, так называть переменную нельзя`);
+    // За именем переменной идёт «=», «;», «,», «)» или «[». Если за словом стоит
+    // другой идентификатор — это не имя, а модификатор типа (`static ref map<…> m_X`).
+    const declaration = new RegExp(
+      `(?:^|[;{}(,])\\s*(?:(?:${MODIFIERS})\\s+)*([A-Za-z_]\\w*(?:<[^>]*>)?)\\s+${word}\\s*(?:[=;,)[]|$)`
+    );
+    const match = code.match(declaration);
+    if (match && !RESERVED.includes(match[1]) && !new RegExp(`^(?:${MODIFIERS})$`).test(match[1])) {
+      problems.push(`«${word}» — ключевое слово Enforce, так называть переменную нельзя`);
+      continue;
+    }
+
+    const usage = new RegExp(`^\\s*${word}\\s*(?:=[^=]|\\+=|-=|\\.[A-Za-z_])`);
+    if (usage.test(code)) {
+      problems.push(`«${word}» используется как переменная, но это ключевое слово Enforce`);
+    }
   }
 
   return problems;
