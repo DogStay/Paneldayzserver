@@ -221,6 +221,18 @@ function normalize(cfg) {
     s.restart.warnTemplate = String(s.restart.warnTemplate || '').trim();
     s.restart.restartTemplate = String(s.restart.restartTemplate || '').trim();
 
+    // Канал сообщений игрокам в игру.
+    // auto — BattlEye, если настроен, иначе CFTools; off — не писать вообще.
+    s.ingame = s.ingame || {};
+    s.ingame.channel = ['battleye', 'cftools', 'off'].includes(s.ingame.channel) ? s.ingame.channel : 'auto';
+    s.ingame.battleye = s.ingame.battleye || {};
+    s.ingame.battleye.host = String(s.ingame.battleye.host || '').trim() || '127.0.0.1';
+    // 0 — взять RConPort из файла настроек BattlEye самого сервера.
+    s.ingame.battleye.port = clamp(toInt(s.ingame.battleye.port, 0), 0, 65535);
+    s.ingame.battleye.password = String(s.ingame.battleye.password || '').trim();
+    s.ingame.battleye.encoding = s.ingame.battleye.encoding === 'cp1251' ? 'cp1251' : 'utf8';
+    s.ingame.battleye.configPath = cleanPath(s.ingame.battleye.configPath);
+
     // Периодические объявления в чат. Сообщений может быть сколько угодно.
     s.announcements = s.announcements || {};
     s.announcements.enabled = Boolean(s.announcements.enabled);
@@ -411,6 +423,7 @@ function view(serverId) {
     cftools: { ...cfg.cftools, ...instance.cftools },
     server: instance.server,
     restart: instance.restart,
+    ingame: instance.ingame,
     announcements: instance.announcements,
     features: instance.features,
     mods: instance.mods
@@ -473,6 +486,11 @@ function publicView() {
 
   copy.servers = copy.servers.map((s) => {
     const v = view(s.id);
+
+    // Пароль RCon наружу не отдаём — как и пароль Steam с секретом CFTools.
+    const hasRconPassword = Boolean(s.ingame.battleye.password);
+    s.ingame = { ...s.ingame, battleye: { ...s.ingame.battleye, password: '', hasPassword: hasRconPassword } };
+
     return {
       ...s,
       resolved: {

@@ -219,12 +219,13 @@ function warnings(serverId) {
   const ready = ingame.available(serverId);
   if (!ready.ok) out.push(`Объявления не дойдут до игроков: ${ready.reason}.`);
 
+  const limit = ready.maxLength || ingame.MAX_LENGTH;
   const tooLong = v.announcements.messages
     .map((text, i) => ({ i, length: ingame.render(text, serverId).length }))
-    .filter((m) => m.length > ingame.MAX_LENGTH);
+    .filter((m) => m.length > limit);
 
   for (const m of tooLong) {
-    out.push(`Объявление №${m.i + 1} длиннее ${ingame.MAX_LENGTH} символов (${m.length}) — оно не отправится.`);
+    out.push(`Объявление №${m.i + 1} длиннее ${limit} символов (${m.length}) — оно не отправится.`);
   }
 
   return out;

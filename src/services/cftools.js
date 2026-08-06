@@ -29,6 +29,9 @@ const API_V1 = 'https://data.cftools.cloud/v1';
 const API_V2 = 'https://data.cftools.cloud/v2';
 
 const REQUEST_TIMEOUT_MS = 20_000;
+
+/** Ограничение CFTools на сообщение игрокам. */
+const MAX_MESSAGE_LENGTH = 256;
 /** Минимальный промежуток между запросами: у API строгие лимиты частоты. */
 const MIN_REQUEST_GAP_MS = 150;
 
@@ -400,13 +403,28 @@ async function messagePrivate(serverId, sessionId, content) {
   return { ok: true };
 }
 
-/** Сообщение всем игрокам на сервере. */
+/**
+ * Сообщение всем игрокам на сервере.
+ *
+ * У CFTools это платная возможность: на бесплатном тарифе запрос отклоняется.
+ * Поэтому к отказу добавляется подсказка про BattlEye RCon — бесплатный канал,
+ * который умеет то же самое.
+ */
 async function broadcast(serverId, content) {
   const s = assertReady(serverId);
+  const body = { content: limit(content, MAX_MESSAGE_LENGTH, 'Сообщение') };
 
-  await call('POST', `/server/${encodeURIComponent(s.serverApiId)}/message-server`, {
-    body: { content: limit(content, 256, 'Сообщение') }
-  });
+  try {
+    await call('POST', `/server/${encodeURIComponent(s.serverApiId)}/message-server`, { body });
+  } catch (err) {
+    if (/доступ|грант|403|подписк/i.test(err.message)) {
+      throw new Error(
+        `${err.message} Отправка сообщений в игру у CFTools доступна на платной подписке — ` +
+          'если её нет, переключите канал сообщений на BattlEye RCon в настройках сервера.'
+      );
+    }
+    throw err;
+  }
 
   logger.info(SOURCE, `«${s.serverName}»: сообщение всем игрокам отправлено`);
   return { ok: true };
@@ -555,5 +573,6 @@ module.exports = {
   listBans,
   createBan,
   deleteBan,
-  resetToken
+  resetToken,
+  MAX_MESSAGE_LENGTH
 };

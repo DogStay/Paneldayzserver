@@ -3,25 +3,35 @@
 /**
  * Отправка текста игрокам в игру.
  *
- * Отдельный модуль, потому что «написать в чат сервера» — не такая простая
- * вещь, как кажется. У DayZ Standalone нет ни своего RCon для чата, ни способа
- * передать строку работающему процессу: движок ничего подобного наружу не
- * отдаёт. Единственный рабочий канал — игровая интеграция CFTools Cloud
- * (мод CFTools / GameLabs на сервере), через неё сообщение и уходит.
+ * Каналов два, и выбор за админом (настройка ingame.channel):
  *
- * Здесь это спрятано за одной функцией say(), поэтому предупреждения о
- * перезапуске и периодические объявления не знают, чем именно доставляется
- * текст. Появится второй канал — менять придётся только этот файл.
+ *   battleye — RCon-порт BattlEye, команда `say -1`. Работает у любого сервера
+ *              DayZ и ничего не стоит; ровно так пишут в чат BEC и подобные
+ *              инструменты. Требует пароль RCon в beserver_x64.cfg.
+ *   cftools  — сообщение через CFTools Cloud. Удобно, если CFTools уже
+ *              подключён, но отправка сообщений в игру у них доступна только
+ *              на платной подписке.
+ *   auto     — по умолчанию: BattlEye, если он настроен, иначе CFTools.
+ *              Так панель пишет в чат «из коробки», без платных подписок.
+ *
+ * Предупреждения о перезапуске и периодические объявления зовут одну функцию
+ * say() и не знают, чем именно доставляется текст. Появится третий канал —
+ * менять придётся только этот файл.
  */
 
 const config = require('../config');
 const logger = require('../logger');
 const cftools = require('./cftools');
+const battleye = require('./battleye');
 
 const SOURCE = 'ingame';
 
-/** Ограничение CFTools на сообщение всем игрокам. */
-const MAX_LENGTH = 256;
+/**
+ * Самое строгое из ограничений каналов: у BattlEye чат обрезает длинные
+ * строки, у CFTools лимит 256 символов. Точный предел выбранного канала
+ * отдаёт available().
+ */
+const MAX_LENGTH = battleye.MAX_LENGTH;
 
 /**
  * Последняя причина недоставки по каждому серверу: одна и та же проблема
@@ -30,11 +40,17 @@ const MAX_LENGTH = 256;
  */
 const lastFailure = new Map();
 
-/**
- * Можно ли сейчас писать в игру — без обращения к сети.
- * @returns {{ok: boolean, reason: string}}
- */
-function available(serverId) {
+/** Выбранный админом канал: auto | battleye | cftools | off. */
+function channelOf(serverId) {
+  try {
+    return config.active(serverId).ingame.channel;
+  } catch (_) {
+    return 'auto';
+  }
+}
+
+/** Готовность CFTools как канала сообщений. */
+function cftoolsReady(serverId) {
   let status;
   try {
     status = cftools.status(serverId);
@@ -43,12 +59,7 @@ function available(serverId) {
   }
 
   if (!status.enabled) {
-    return {
-      ok: false,
-      reason:
-        'сообщения в игру идут через CFTools Cloud, а интеграция выключена ' +
-        '(включается в настройках сервера)'
-    };
+    return { ok: false, reason: 'интеграция с CFTools выключена (включается в настройках сервера)' };
   }
   if (!status.hasApplicationId || !status.hasSecret) {
     return { ok: false, reason: 'в настройках CFTools не заполнены Application ID и Secret' };
@@ -58,6 +69,53 @@ function available(serverId) {
   }
 
   return { ok: true, reason: '' };
+}
+
+/** Готовность BattlEye RCon как канала сообщений. */
+function battleyeReady(serverId) {
+  let status;
+  try {
+    status = battleye.status(serverId);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+  return { ok: Boolean(status.ready), reason: status.reason || '' };
+}
+
+/**
+ * Можно ли сейчас писать в игру и каким каналом — без обращения к сети.
+ * @returns {{ok: boolean, channel: string, reason: string, maxLength: number}}
+ */
+function available(serverId) {
+  const channel = channelOf(serverId);
+  const be = battleyeReady(serverId);
+  const cf = cftoolsReady(serverId);
+
+  const describe = (name, ready) => ({
+    ok: ready.ok,
+    channel: name,
+    reason: ready.ok ? '' : `${name === 'battleye' ? 'BattlEye RCon' : 'CFTools'}: ${ready.reason}`,
+    maxLength: name === 'battleye' ? battleye.MAX_LENGTH : cftools.MAX_MESSAGE_LENGTH
+  });
+
+  if (channel === 'off') {
+    return { ok: false, channel: 'off', reason: 'сообщения в игру отключены в настройках сервера', maxLength: MAX_LENGTH };
+  }
+  if (channel === 'battleye') return describe('battleye', be);
+  if (channel === 'cftools') return describe('cftools', cf);
+
+  // auto: сначала бесплатный BattlEye, потом CFTools.
+  if (be.ok) return describe('battleye', be);
+  if (cf.ok) return describe('cftools', cf);
+
+  return {
+    ok: false,
+    channel: 'auto',
+    reason:
+      `ни один канал не готов. BattlEye RCon: ${be.reason}. CFTools: ${cf.reason}. ` +
+      'Проще всего настроить BattlEye — он есть у любого сервера DayZ и не требует подписки',
+    maxLength: MAX_LENGTH
+  };
 }
 
 /**
@@ -142,25 +200,33 @@ async function say(serverId, text, opts = {}) {
   const ready = available(serverId);
   if (!ready.ok) {
     noteFailure(serverId, ready.reason, label, opts.quiet);
-    return { sent: false, reason: ready.reason, text: message };
+    return { sent: false, reason: ready.reason, text: message, channel: ready.channel };
   }
 
-  if (message.length > MAX_LENGTH) {
-    const reason = `текст длиннее ${MAX_LENGTH} символов (${message.length}) — CFTools такое не принимает`;
+  if (message.length > ready.maxLength) {
+    const reason =
+      `текст длиннее ${ready.maxLength} символов (${message.length}) — ` +
+      `${ready.channel === 'battleye' ? 'в чате он обрежется' : 'CFTools такое не принимает'}`;
     noteFailure(serverId, reason, label, opts.quiet);
-    return { sent: false, reason, text: message };
+    return { sent: false, reason, text: message, channel: ready.channel };
   }
 
   try {
-    await cftools.broadcast(serverId, message);
+    if (ready.channel === 'battleye') await battleye.say(serverId, message);
+    else await cftools.broadcast(serverId, message);
+
     lastFailure.delete(serverId);
-    logger.info(SOURCE, `В игру отправлено (${label}): ${message}`, { serverId });
-    return { sent: true, text: message };
+    logger.info(SOURCE, `В игру отправлено через ${channelName(ready.channel)} (${label}): ${message}`, {
+      serverId
+    });
+    return { sent: true, text: message, channel: ready.channel };
   } catch (err) {
     noteFailure(serverId, err.message, label, opts.quiet);
-    return { sent: false, reason: err.message, text: message };
+    return { sent: false, reason: err.message, text: message, channel: ready.channel };
   }
 }
+
+const channelName = (channel) => (channel === 'battleye' ? 'BattlEye RCon' : 'CFTools');
 
 /**
  * Одна и та же причина не пишется в лог повторно.
@@ -182,4 +248,4 @@ function resetFailures(serverId) {
   else lastFailure.clear();
 }
 
-module.exports = { say, render, available, resetFailures, MAX_LENGTH };
+module.exports = { say, render, available, resetFailures, channelName, MAX_LENGTH };

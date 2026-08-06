@@ -92,6 +92,15 @@ export const api = {
   missions: () => request('GET', '/missions'),
   selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
 
+  ingame: () => request('GET', '/ingame'),
+  ingameSay: (text) => request('POST', '/ingame/say', { text }),
+
+  battleye: () => request('GET', '/battleye'),
+  battleyeTest: () => request('POST', '/battleye/test', {}),
+  battleyeSetup: (body) => request('POST', '/battleye/setup', body || {}),
+  battleyePlayers: () => request('GET', '/battleye/players'),
+  battleyeCommand: (command) => request('POST', '/battleye/command', { command }),
+
   announcements: () => request('GET', '/announcements'),
   sendAnnouncement: (body) => request('POST', '/announcements/send', body || {}),
   previewAnnouncements: (texts) => request('POST', '/announcements/preview', { texts }),

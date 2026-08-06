@@ -74,6 +74,17 @@
       "restartTemplate": "Сервер перезапускается. Заходите снова через пару минут."
     },
 
+    "ingame": {
+      "channel": "auto",
+      "battleye": {
+        "host": "127.0.0.1",
+        "port": 0,
+        "password": "",
+        "encoding": "utf8",
+        "configPath": ""
+      }
+    },
+
     "announcements": {
       "enabled": false,
       "intervalMinutes": 15,

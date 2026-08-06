@@ -8,7 +8,7 @@
 
 import { api } from '../api.js';
 import { state, activeServer, announcementsOf, refreshConfig, refreshServers, refreshStatus } from '../store.js';
-import { esc, icon, toast, busy, modal } from '../ui.js';
+import { esc, icon, toast, busy, modal, confirmDialog } from '../ui.js';
 
 let paneRef = null;
 
@@ -45,6 +45,8 @@ function render(s, cfg) {
   const f = s.features;
   const r = s.restart;
   const an = s.announcements || { enabled: false, intervalMinutes: 15, order: 'rotate', messages: [] };
+  const ig = s.ingame || { channel: 'auto', battleye: {} };
+  const be = ig.battleye || {};
 
   return `
     <div class="card">
@@ -149,8 +151,8 @@ function render(s, cfg) {
       <label class="switch" style="margin-top:18px">
         <input type="checkbox" data-p="restart.announceInGame" ${r.announceInGame ? 'checked' : ''}>
         <span class="track"></span><span class="switch-text">Предупреждать игроков в игре
-          <small>Сообщения уходят в чат сервера через CFTools Cloud — интеграция должна быть включена
-            и настроена, у DayZ другого канала для этого нет</small></span>
+          <small>Сообщения уходят в чат сервера выбранным каналом — BattlEye RCon (бесплатно)
+            или CFTools; настраивается ниже, в разделе «Сообщения в игру»</small></span>
       </label>
 
       <div class="form-grid" style="margin-top:16px">
@@ -328,6 +330,66 @@ function render(s, cfg) {
 
     <div class="card">
       <div class="card-head">
+        <span class="card-title-icon">${icon('terminal')}</span>
+        <div><h2>Сообщения в игру</h2>
+          <div class="card-sub">Чем панель пишет игрокам: предупреждения о перезапуске и объявления в чат</div></div>
+        <span class="spacer"></span>
+        <span class="small faint" id="ingame-state">—</span>
+      </div>
+
+      <div class="notice info mb"><span class="ic">${icon('info')}</span>
+        <div><b>BattlEye RCon</b> — бесплатный способ: RCon есть у любого сервера DayZ, именно так пишут в чат
+        BEC и похожие программы. Нужен лишь пароль в <span class="inline-code">battleye\\beserver_x64.cfg</span> —
+        панель умеет создать этот файл сама.<br>
+        <b>CFTools</b> — удобно, если он уже подключён, но отправка сообщений в игру у CFTools доступна
+        только на платной подписке.</div></div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Канал</label>
+          <select data-p="ingame.channel">
+            <option value="auto" ${ig.channel === 'auto' ? 'selected' : ''}>Автоматически: BattlEye, иначе CFTools</option>
+            <option value="battleye" ${ig.channel === 'battleye' ? 'selected' : ''}>Только BattlEye RCon (бесплатно)</option>
+            <option value="cftools" ${ig.channel === 'cftools' ? 'selected' : ''}>Только CFTools (нужна подписка)</option>
+            <option value="off" ${ig.channel === 'off' ? 'selected' : ''}>Не писать в игру</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>RCon-порт BattlEye <span class="badge">0 = из конфига</span></label>
+          <input type="number" data-p="ingame.battleye.port" value="${be.port || 0}" min="0" max="65535">
+          <div class="hint">Пусто/0 — панель возьмёт <span class="inline-code">RConPort</span> из настроек
+            BattlEye сервера, иначе 2306</div>
+        </div>
+        <div class="field">
+          <label>Пароль RCon ${be.hasPassword ? '<span class="badge ok">задан</span>' : '<span class="badge">из конфига</span>'}</label>
+          <input type="password" data-p="ingame.battleye.password" value="" autocomplete="new-password"
+                 placeholder="пусто — взять из beserver_x64.cfg">
+        </div>
+        <div class="field">
+          <label>Адрес BattlEye</label>
+          <input type="text" data-p="ingame.battleye.host" value="${esc(be.host || '127.0.0.1')}">
+          <div class="hint">Панель и сервер на одной машине — оставьте 127.0.0.1</div>
+        </div>
+        <div class="field">
+          <label>Кодировка сообщений</label>
+          <select data-p="ingame.battleye.encoding">
+            <option value="utf8" ${be.encoding !== 'cp1251' ? 'selected' : ''}>UTF-8 (обычно верно)</option>
+            <option value="cp1251" ${be.encoding === 'cp1251' ? 'selected' : ''}>CP1251 (если русский в чате «кракозябрами»)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row wrap" style="margin-top:16px">
+        <button class="btn" id="be-test" type="button">${icon('zap')} Проверить BattlEye RCon</button>
+        <button class="btn" id="be-setup" type="button">${icon('key')} Настроить BattlEye</button>
+        <button class="btn" id="ingame-say" type="button">${icon('users')} Отправить тестовое сообщение</button>
+      </div>
+      <div class="hint" style="margin-top:8px">Проверка использует сохранённые настройки — сначала
+        «Сохранить настройки». RCon работает только когда сервер запущен.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <span class="card-title-icon">${icon('users')}</span>
         <div><h2>Объявления в чат</h2>
           <div class="card-sub">Сообщения игрокам по кругу: правила, Discord, время до перезапуска —
@@ -337,7 +399,7 @@ function render(s, cfg) {
       <label class="switch">
         <input type="checkbox" data-p="announcements.enabled" ${an.enabled ? 'checked' : ''}>
         <span class="track"></span><span class="switch-text">Отправлять объявления в игру
-          <small>Идут тем же каналом, что и предупреждения о перезапуске — через CFTools Cloud.
+          <small>Идут тем же каналом, что и предупреждения о перезапуске (см. «Сообщения в игру»).
             Отсчёт только пока сервер работает</small></span>
       </label>
 
@@ -366,7 +428,8 @@ function render(s, cfg) {
 Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</textarea>
         <div class="hint">Подстановки: <span class="inline-code">{server}</span> — название сервера,
           <span class="inline-code">{map}</span> — карта, <span class="inline-code">{restart}</span> — время
-          до планового перезапуска. Ограничение CFTools — 256 символов на сообщение.</div>
+          до планового перезапуска. Длинные сообщения обрезаются: у BattlEye — примерно 200 символов,
+          у CFTools — 256. Точный предел показывает «Предпросмотр».</div>
       </div>
 
       <div class="row wrap" style="margin-top:14px">
@@ -474,6 +537,7 @@ function bind(server) {
 
   paneRef.querySelector('#mission-pick').addEventListener('click', () => openMissionPicker());
   bindAnnouncements();
+  bindIngame();
 
   paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
@@ -562,6 +626,128 @@ function bind(server) {
       paneRef.querySelector('#set-status').textContent = `сохранено в ${new Date().toLocaleTimeString('ru-RU')}`;
       toast('Настройки сохранены', 'ok');
       await load();
+    })
+  );
+}
+
+/* ------------------------------------------------------ сообщения в игру */
+
+/**
+ * Канал сообщений: показ текущего состояния и три кнопки — проверить RCon,
+ * создать конфиг BattlEye и отправить тестовое сообщение в чат.
+ */
+function bindIngame() {
+  const stateEl = paneRef.querySelector('#ingame-state');
+
+  const showState = async () => {
+    try {
+      const data = await api.ingame();
+      const d = data.delivery;
+      stateEl.textContent = d.ok
+        ? `канал готов: ${d.channel === 'battleye' ? 'BattlEye RCon' : 'CFTools'}, до ${d.maxLength} символов`
+        : `канал не готов — ${d.reason}`;
+      stateEl.classList.toggle('faint', d.ok);
+    } catch (err) {
+      stateEl.textContent = err.message;
+    }
+  };
+  showState();
+
+  paneRef.querySelector('#be-test').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const r = await api.battleyeTest();
+      toast(
+        `BattlEye RCon отвечает (${r.host}:${r.port}, порт ${r.portFrom}). Игроков онлайн: ${r.playersOnline}`,
+        'ok',
+        10000
+      );
+      await showState();
+    })
+  );
+
+  paneRef.querySelector('#be-setup').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const status = await api.battleye();
+      if (status.configFile) {
+        const yes = await confirmDialog({
+          title: 'Файл настроек BattlEye уже есть',
+          message: `Найден <span class="inline-code">${esc(status.configFile)}</span>,
+            пароль RCon ${status.hasPassword ? 'в нём есть' : '<b>отсутствует</b>'}.<br><br>
+            Перезаписать его новым паролем? Старый пароль перестанет работать,
+            а изменения применятся после перезапуска сервера.`,
+          confirmText: 'Перезаписать',
+          danger: true
+        });
+        if (!yes) return;
+      }
+
+      const result = await api.battleyeSetup({ force: Boolean(status.configFile) });
+      modal({
+        title: result.created ? 'BattlEye настроен' : 'Файл уже был настроен',
+        subtitle: result.path,
+        icon: 'key',
+        body: `
+          <div class="col" style="gap:12px">
+            <div class="notice ${result.created ? 'ok' : 'info'}"><span class="ic">${icon('check')}</span>
+              <div>${esc(result.message)}</div></div>
+            ${result.created
+              ? `<div class="field">
+                   <label>Пароль RCon</label>
+                   <input type="text" value="${esc(result.password)}" readonly>
+                   <div class="hint">Панель возьмёт его из файла сама. Тот же пароль можно вписать
+                     в BEC или DaRT, если пользуетесь ими.</div>
+                 </div>
+                 <div class="field">
+                   <label>RCon-порт</label>
+                   <input type="text" value="${esc(String(result.port))}" readonly>
+                 </div>`
+              : ''}
+          </div>`,
+        footer: `<span class="spacer"></span><button class="btn btn-primary" data-close>Понятно</button>`
+      });
+      await showState();
+    })
+  );
+
+  paneRef.querySelector('#ingame-say').addEventListener('click', () => {
+    askText({
+      title: 'Тестовое сообщение в чат',
+      subtitle: 'Уйдёт всем игрокам на сервере прямо сейчас',
+      label: 'Текст',
+      value: 'Проверка связи из панели',
+      confirmText: 'Отправить',
+      onSubmit: async (value) => {
+        const r = await api.ingameSay(value);
+        toast(`Отправлено через ${r.channel === 'battleye' ? 'BattlEye RCon' : 'CFTools'}: ${r.text}`, 'ok', 9000);
+        await showState();
+      }
+    });
+  });
+}
+
+/** Окно с одним текстовым полем. */
+function askText(opts) {
+  const m = modal({
+    title: opts.title,
+    subtitle: opts.subtitle,
+    icon: 'file',
+    body: `
+      <div class="field">
+        <label>${esc(opts.label)}</label>
+        <input type="text" id="ask-value" value="${esc(opts.value || '')}">
+      </div>`,
+    footer: `
+      <span class="spacer"></span>
+      <button class="btn" data-close>Отмена</button>
+      <button class="btn btn-primary" id="ask-go">${esc(opts.confirmText)}</button>`
+  });
+
+  m.footer.querySelector('#ask-go').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const value = m.body.querySelector('#ask-value').value.trim();
+      if (!value) return toast('Заполните поле', 'warn');
+      await opts.onSubmit(value);
+      m.close();
     })
   );
 }

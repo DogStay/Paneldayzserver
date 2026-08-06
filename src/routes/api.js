@@ -30,6 +30,7 @@ const diagnostics = require('../services/diagnostics');
 const scheduler = require('../services/scheduler');
 const announcer = require('../services/announcer');
 const ingame = require('../services/ingame');
+const battleye = require('../services/battleye');
 
 const router = express.Router();
 
@@ -196,7 +197,19 @@ router.patch(
     delete patch.id;
     delete patch.mods;
 
+    // Пустой пароль RCon означает «не менять» — как пароль Steam и секрет CFTools.
+    if (patch.ingame && patch.ingame.battleye) {
+      if (!patch.ingame.battleye.password) delete patch.ingame.battleye.password;
+      delete patch.ingame.battleye.hasPassword;
+    }
+
     const updated = config.updateServer(req.params.id, patch);
+
+    // Настройки подключения могли измениться — пробуем связаться заново.
+    if (patch.ingame) {
+      battleye.resetBlocked(req.params.id);
+      ingame.resetFailures(req.params.id);
+    }
     // Название сервера в конфиге DayZ следует за названием в панели.
     if (patch.name && (!patch.server || patch.server.name === undefined)) {
       config.updateServer(req.params.id, { server: { name: patch.name } });
@@ -562,6 +575,71 @@ router.post(
   })
 );
 
+/* ------------------------------------------------- сообщения в игру */
+
+/** Каким каналом панель пишет игрокам и готов ли он. */
+router.get('/ingame', (req, res) => {
+  const serverId = serverIdOf(req);
+  const v = config.active(serverId);
+
+  res.json({
+    channel: v.ingame.channel,
+    delivery: ingame.available(serverId),
+    battleye: battleye.status(serverId),
+    cftools: cftools.status(serverId)
+  });
+});
+
+/** Отправить произвольный текст игрокам — кнопка проверки канала. */
+router.post(
+  '/ingame/say',
+  wrap(async (req, res) => {
+    const result = await ingame.say(serverIdOf(req), (req.body || {}).text, {
+      label: 'проверка канала',
+      quiet: true
+    });
+    if (!result.sent) return res.status(400).json({ error: `Не отправлено: ${result.reason}` });
+    res.json(result);
+  })
+);
+
+/* ------------------------------------------------------ BattlEye RCon */
+
+router.get('/battleye', (req, res) => res.json(battleye.status(serverIdOf(req))));
+
+/** Вход по паролю RCon и запрос списка игроков — проверка связи. */
+router.post('/battleye/test', wrap(async (req, res) => res.json(await battleye.test(serverIdOf(req)))));
+
+/** Создать battleye\beserver_x64.cfg с паролем RCon. */
+router.post(
+  '/battleye/setup',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const result = battleye.setupConfig(serverIdOf(req), {
+      force: body.force === true,
+      password: body.password,
+      port: body.port
+    });
+    res.json({ ...result, status: battleye.status(serverIdOf(req)) });
+  })
+);
+
+/** Игроки онлайн по данным BattlEye — работает без CFTools. */
+router.get('/battleye/players', wrap(async (req, res) => res.json(await battleye.players(serverIdOf(req)))));
+
+/** Произвольная RCon-команда (`#shutdown`, `kick 0 …`, `players`). */
+router.post(
+  '/battleye/command',
+  wrap(async (req, res) => {
+    const line = String((req.body || {}).command || '').trim();
+    if (!line) return res.status(400).json({ error: 'Не указана команда' });
+
+    const output = await battleye.command(serverIdOf(req), line);
+    logger.warn('panel', `Выполнена RCon-команда BattlEye: ${line}`);
+    res.json({ output });
+  })
+);
+
 /* ------------------------------------------------------- объявления в чат */
 
 /** Список объявлений, расписание отправки и готовность канала доставки. */
@@ -573,7 +651,7 @@ router.get('/announcements', (req, res) => {
     ...v.announcements,
     state: announcer.state(serverId),
     delivery: ingame.available(serverId),
-    maxLength: ingame.MAX_LENGTH,
+    maxLength: ingame.available(serverId).maxLength,
     warnings: announcer.warnings(serverId)
   });
 });
@@ -592,10 +670,13 @@ router.post(
 router.post('/announcements/preview', (req, res) => {
   const serverId = serverIdOf(req);
   const texts = Array.isArray((req.body || {}).texts) ? req.body.texts : [];
+  const limit = ingame.available(serverId).maxLength;
+
   res.json({
+    maxLength: limit,
     preview: texts.map((text) => {
       const rendered = ingame.render(text, serverId);
-      return { text: rendered, length: rendered.length, tooLong: rendered.length > ingame.MAX_LENGTH };
+      return { text: rendered, length: rendered.length, tooLong: rendered.length > limit };
     })
   });
 });

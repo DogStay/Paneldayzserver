@@ -177,6 +177,15 @@ function serverSection(server, status) {
   out.push(`  Пароль админа:  ${v.server.adminPassword ? 'задан' : 'нет'}`);
   out.push(`  Доп. порты:     ${v.server.extraPorts.map((p) => `${p.protocol} ${p.from}-${p.to}`).join(', ') || '—'}`);
   out.push(`  Флаги:          ${JSON.stringify(v.features)}`);
+  const delivery = require('./ingame').available(v.id);
+  const be = require('./battleye').status(v.id);
+  out.push(
+    `  Чат в игру:     канал ${v.ingame.channel}, готов: ${delivery.ok ? `да (${delivery.channel})` : `нет — ${delivery.reason}`}`
+  );
+  out.push(
+    `  BattlEye RCon:  ${be.host}:${be.port} (${be.portFrom}), пароль ${be.hasPassword ? `есть (${be.passwordFrom})` : 'НЕ найден'}` +
+      `${be.configFile ? `, конфиг ${be.configFile}` : ''}`
+  );
   out.push(
     `  CFTools:        ${v.cftools.enabled
       ? `включён (ключи ${v.cftools.applicationId && v.cftools.secret ? 'заданы' : 'НЕ заданы'}, ` +
