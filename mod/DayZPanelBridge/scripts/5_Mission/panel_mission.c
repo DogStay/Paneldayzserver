@@ -29,9 +29,18 @@ modded class MissionServer
         bridge.Init(world, PanelWorldSize(world), "", GetGame().ServerConfigGetInt("maxPlayers"));
     }
 
-    /** Размер карты в метрах: у движка этого не спросить, берём по имени мира. */
+    /**
+     * Размер карты в метрах.
+     *
+     * Спрашиваем у движка — тогда любая модовая карта (Raman, DeerIsle, свои
+     * терраины) отдаёт точное значение, и метки на карте панели не разъезжаются.
+     * Табличка ниже осталась подстраховкой, если движок ответит нулём.
+     */
     private int PanelWorldSize(string world)
     {
+        int size = GetGame().GetWorld().GetWorldSize();
+        if (size > 0) return size;
+
         switch (world)
         {
             case "chernarusplus": return 15360;

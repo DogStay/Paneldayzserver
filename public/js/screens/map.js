@@ -27,10 +27,15 @@ let view = {
   trail: null,
   trails: [],
   trailMinutes: 30,
-  showAllTrails: false
+  showAllTrails: false,
+  /** Сведения о подложке от /api/map: слой, зумы, источник. */
+  tiles: null
 };
 /** Масштаб и сдвиг карты — колесо мыши и перетаскивание. */
 let camera = { zoom: 1, x: 0, y: 0, dragging: false };
+/** Загруженные тайлы подложки: ключ «слой/z/x/y» -> Image | 'loading' | 'missing'. */
+const tiles = new Map();
+let drawPending = false;
 
 export function initMapTab(pane) {
   paneRef = pane;
@@ -77,9 +82,12 @@ async function load() {
   const data = await api.bridgePlayers().catch(() => ({ players: [], worldSize: status.worldSize }));
   view.players = data.players || [];
   view.worldSize = data.worldSize || status.worldSize || 15360;
+  view.world = status.world || '';
 
   renderShell(status);
+  await loadTiles();
   await loadBackground(status.world);
+  renderSource();
   draw();
   renderList();
   await refreshTrails();
@@ -143,6 +151,11 @@ function renderShell(status) {
             <option value="60" ${view.trailMinutes === 60 ? 'selected' : ''}>за час</option>
             <option value="120" ${view.trailMinutes === 120 ? 'selected' : ''}>за 2 часа</option>
           </select>
+          <select id="map-layer" style="width:150px" title="Подложка карты">
+            <option value="off">без подложки</option>
+            <option value="topographic">карта</option>
+            <option value="satellite">спутник</option>
+          </select>
           <button class="btn btn-sm" id="map-zoom-in">${icon('plus')}</button>
           <button class="btn btn-sm" id="map-zoom-out">−</button>
           <button class="btn btn-sm" id="map-reset">${icon('refresh')} Вписать</button>
@@ -155,8 +168,8 @@ function renderShell(status) {
       </div>
       <div class="hint" style="margin-top:8px">Колесо мыши — масштаб, перетаскивание — сдвиг,
         клик по метке — карточка игрока, <b>правый клик по карте</b> — заспавнить объект или
-        телепортировать выбранного игрока в это место. Свой фон: положите картинку в
-        <span class="inline-code">public/maps/${esc(status.world || 'chernarusplus')}.jpg</span></div>
+        телепортировать выбранного игрока в это место.</div>
+      <div class="hint" id="map-source" style="margin-top:4px"></div>
     </div>
 
     <div class="map-columns">
@@ -184,6 +197,23 @@ function renderShell(status) {
     draw();
   });
 
+  const layerSelect = paneRef.querySelector('#map-layer');
+  layerSelect.value = view.tiles && view.tiles.enabled ? view.tiles.layer : 'off';
+  layerSelect.addEventListener('change', (e) =>
+    busy(e.currentTarget, async () => {
+      const value = e.currentTarget.value;
+      await api.saveConfig({
+        panel: { map: { tiles: { enabled: value !== 'off', layer: value === 'off' ? undefined : value } } }
+      });
+
+      // Слой сменился — прежние тайлы больше не годятся.
+      tiles.clear();
+      await loadTiles();
+      renderSource();
+      draw();
+    })
+  );
+
   paneRef.querySelector('#map-trail-minutes').addEventListener('change', (e) => {
     view.trailMinutes = Number(e.currentTarget.value) || 30;
     refreshTrails();
@@ -193,6 +223,123 @@ function renderShell(status) {
     view.showAllTrails = e.currentTarget.checked;
     refreshTrails();
   });
+}
+
+/* ------------------------------------------------------------ подложка */
+
+/**
+ * Настоящая карта под метками.
+ *
+ * Тайлы панель отдаёт сама (см. src/services/maptiles.js): раз скачала — дальше
+ * с диска. Здесь только выбор зума под текущий масштаб и отрисовка видимых
+ * тайлов; невидимые не запрашиваются вовсе.
+ */
+async function loadTiles() {
+  try {
+    const info = await api.map();
+    view.tiles = {
+      enabled: info.tiles.enabled && info.tiles.hasSource,
+      layer: info.tiles.layer,
+      layers: info.layers || [],
+      attribution: info.tiles.attribution,
+      maxZoom: info.maxZoom,
+      tileSize: info.tileSize,
+      reason: info.reason,
+      cache: info.cache
+    };
+  } catch (_) {
+    // Подложка — украшение: если её не удалось выяснить, остаётся сетка.
+    view.tiles = null;
+  }
+}
+
+/** Подпись под картой: источник тайлов, размер кэша или причина, почему их нет. */
+function renderSource() {
+  const node = paneRef && paneRef.querySelector('#map-source');
+  if (!node) return;
+
+  const info = view.tiles;
+
+  // Список слоёв рисуется до того, как панель ответит про подложку, поэтому
+  // выбранное значение выставляем здесь — когда ответ уже есть.
+  const select = paneRef.querySelector('#map-layer');
+  if (select) select.value = info && info.enabled ? info.layer : 'off';
+  if (!info) return void (node.textContent = '');
+
+  if (!info.enabled) {
+    node.innerHTML = info.reason
+      ? `Подложки нет: ${esc(info.reason)}. Своя картинка: положите её в
+         <span class="inline-code">public/maps/${esc(view.world || 'карта')}.jpg</span>`
+      : 'Подложка выключена — рисуется только сетка координат.';
+    return;
+  }
+
+  const cached = info.cache && info.cache.files ? info.cache : null;
+  node.innerHTML =
+    `${esc(info.attribution || '')} · тайлы кэшируются на этой машине` +
+    (cached ? ` (${cached.files} шт., ${Math.round(cached.bytes / 1024)} КБ)` : '');
+}
+
+/** Картинка тайла из кэша браузера; отсутствующую запрашиваем один раз. */
+function tileImage(layer, z, x, y) {
+  const key = `${layer}/${z}/${x}/${y}`;
+  const cached = tiles.get(key);
+  if (cached) return cached === 'loading' || cached === 'missing' ? null : cached;
+
+  const image = new Image();
+  tiles.set(key, 'loading');
+
+  image.onload = () => {
+    tiles.set(key, image);
+    scheduleDraw();
+  };
+  // Пустой тайл (край карты, дальний зум) — не ошибка, просто больше не просим.
+  image.onerror = () => tiles.set(key, 'missing');
+
+  const server = activeServer();
+  image.src = `/api/map/tiles/${layer}/${z}/${x}/${y}${server ? `?serverId=${encodeURIComponent(server.id)}` : ''}`;
+  return null;
+}
+
+/** Перерисовка не на каждый догруженный тайл, а раз в кадр. */
+function scheduleDraw() {
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(() => {
+    drawPending = false;
+    draw();
+  });
+}
+
+/**
+ * @returns {boolean} нарисовался ли хоть один тайл — иначе рисуем сетку на фоне
+ */
+function drawTiles(ctx, left, top, side) {
+  const info = view.tiles;
+  if (!info || !info.enabled || !canvas) return false;
+
+  // Зум подбираем так, чтобы тайл на экране был близок к своему размеру.
+  const wanted = Math.round(Math.log2(side / info.tileSize));
+  const z = Math.max(0, Math.min(info.maxZoom, wanted));
+  const count = 2 ** z;
+  const step = side / count;
+
+  const first = (offset) => Math.max(0, Math.floor(-offset / step));
+  const last = (offset, limit) => Math.min(count - 1, Math.floor((limit - offset) / step));
+
+  let drawn = 0;
+  for (let x = first(left); x <= last(left, canvas.width); x++) {
+    for (let y = first(top); y <= last(top, canvas.height); y++) {
+      const image = tileImage(info.layer, z, x, y);
+      if (!image) continue;
+
+      // +1 пиксель — чтобы между тайлами не просвечивали щели при дробном шаге.
+      ctx.drawImage(image, left + x * step, top + y * step, step + 1, step + 1);
+      drawn++;
+    }
+  }
+
+  return drawn > 0;
 }
 
 /** Своя картинка-подложка, если пользователь её положил. */
@@ -216,24 +363,32 @@ function loadBackground(world) {
 
 /* ------------------------------------------------------------- отрисовка */
 
+/**
+ * Камера: карта — это квадрат со стороной side, левый верхний угол которого
+ * лежит в (camera.x, camera.y) на холсте. Все преобразования считаются от него,
+ * поэтому метки, сетка, трассы и тайлы всегда сходятся между собой.
+ */
+function mapBox() {
+  const side = canvas.width * camera.zoom;
+  return { left: camera.x, top: camera.y, side };
+}
+
 /** Мировые координаты -> пиксели на холсте. */
 function toScreen(pos) {
-  const size = canvas.width;
-  const scale = (size / view.worldSize) * camera.zoom;
+  const { left, top, side } = mapBox();
   return {
-    x: pos[0] * scale + camera.x,
+    x: left + (pos[0] / view.worldSize) * side,
     // В DayZ z растёт на север, а на холсте вниз — переворачиваем.
-    y: size - pos[2] * scale + camera.y - size * (camera.zoom - 1)
+    y: top + (1 - pos[2] / view.worldSize) * side
   };
 }
 
 /** Обратное преобразование: клик по холсту -> координаты в мире. */
 function toWorld(px, py) {
-  const size = canvas.width;
-  const scale = (size / view.worldSize) * camera.zoom;
+  const { left, top, side } = mapBox();
   return {
-    x: (px - camera.x) / scale,
-    z: (size + camera.y - size * (camera.zoom - 1) - py) / scale
+    x: ((px - left) / side) * view.worldSize,
+    z: (1 - (py - top) / side) * view.worldSize
   };
 }
 
@@ -255,18 +410,14 @@ function draw() {
   ctx.fillStyle = '#0d1117';
   ctx.fillRect(0, 0, size, size);
 
-  const origin = toScreen([0, 0, 0]);
-  const far = toScreen([view.worldSize, 0, view.worldSize]);
-  const left = Math.min(origin.x, far.x);
-  const top = Math.min(origin.y, far.y);
-  const side = Math.abs(far.x - origin.x);
+  const { left, top, side } = mapBox();
 
-  if (view.bg) {
-    ctx.drawImage(view.bg, left, top, side, side);
-  } else {
-    ctx.fillStyle = '#111a22';
-    ctx.fillRect(left, top, side, side);
-  }
+  ctx.fillStyle = '#111a22';
+  ctx.fillRect(left, top, side, side);
+
+  // Порядок: тайлы карты, иначе своя картинка, иначе просто заливка под сетку.
+  const hasTiles = drawTiles(ctx, left, top, side);
+  if (!hasTiles && view.bg) ctx.drawImage(view.bg, left, top, side, side);
 
   // Сетка по километрам: без неё координаты игрока не с чем соотнести.
   const step = view.worldSize >= 12000 ? 1000 : 500;
@@ -564,12 +715,14 @@ function zoomBy(factor, cx, cy) {
   const before = camera.zoom;
   camera.zoom = Math.min(12, Math.max(0.5, camera.zoom * factor));
 
-  // Держим точку под курсором на месте — иначе масштабирование «уезжает».
-  if (cx !== undefined) {
-    const k = camera.zoom / before;
-    camera.x = cx - (cx - camera.x) * k;
-    camera.y = cy - (cy - camera.y) * k;
-  }
+  // Точка под курсором остаётся на месте. Кнопки «+»/«−» курсора не дают —
+  // тогда держим центр холста, иначе карта уезжает из вида.
+  const ax = cx === undefined ? canvas.width / 2 : cx;
+  const ay = cy === undefined ? canvas.height / 2 : cy;
+  const k = camera.zoom / before;
+
+  camera.x = ax - (ax - camera.x) * k;
+  camera.y = ay - (ay - camera.y) * k;
   draw();
 }
 

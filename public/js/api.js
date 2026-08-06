@@ -109,6 +109,10 @@ export const api = {
   saveServerCfg: (content) => request('PUT', '/servercfg', { content }),
   syncServerCfg: () => request('POST', '/servercfg/sync', {}),
 
+  /* Подложка карты: тайлы отдаёт сама панель, кэшируя их на диске */
+  map: () => request('GET', '/map'),
+  clearMapTiles: (all) => request('DELETE', `/map/tiles${all ? '?all=1' : ''}`),
+
   missions: () => request('GET', '/missions'),
   selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
 

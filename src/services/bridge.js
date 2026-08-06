@@ -25,6 +25,7 @@ const config = require('../config');
 const logger = require('../logger');
 const bus = require('../events');
 const eventlog = require('./eventlog');
+const maptiles = require('./maptiles');
 
 const SOURCE = 'bridge';
 
@@ -47,15 +48,11 @@ const TRAIL_KEEP_MS = 2 * 3600_000;
 const TRAIL_MIN_STEP_M = 3;
 
 /** Размеры известных карт (метры на сторону) — если мод не сообщил свой. */
-const WORLD_SIZES = {
-  chernarusplus: 15360,
-  chernarus: 15360,
-  enoch: 12800,
-  sakhal: 8192,
-  namalsk: 12800,
-  deerisle: 16384,
-  banov: 12800
-};
+/*
+ * Размеры карт берём из каталога панели (src/data/dayz-maps.json) — там 40+
+ * карт, включая модовые. Своя короткая табличка была бы вечно неполной: на
+ * Raman (32768 м) метки игроков разъезжались бы в четыре раза.
+ */
 
 /**
  * serverId -> {
@@ -146,7 +143,12 @@ function reasonFor(serverId, dir, online) {
   return 'мод молчит: сервер остановлен или мод выключен в panel/config.json';
 }
 
-/** Размер карты в метрах: из hello, иначе по имени миссии. */
+/**
+ * Размер карты в метрах.
+ *
+ * Первым делом — то, что сообщил мод: он спрашивает его у движка и знает точно
+ * даже для самодельных терраинов. Каталог нужен, пока мод не на связи.
+ */
 function worldSize(serverId) {
   const st = stateOf(serverId);
   const fromHello = st.hello && Number(st.hello.worldSize);
@@ -158,8 +160,8 @@ function worldSize(serverId) {
   } catch (_) {
     /* сервера может не быть */
   }
-  const world = (st.hello && st.hello.world) || mission.split('.').pop() || '';
-  return WORLD_SIZES[String(world).toLowerCase()] || 15360;
+  const world = (st.hello && st.hello.world) || mission;
+  return maptiles.sizeOf(world) || 15360;
 }
 
 /** Игроки онлайн по последнему снимку. */
@@ -560,6 +562,5 @@ module.exports = {
   prepare,
   bridgeDir,
   worldSize,
-  WORLD_SIZES,
   ONLINE_TIMEOUT_MS
 };

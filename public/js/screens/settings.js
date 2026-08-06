@@ -513,6 +513,17 @@ Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</
 
     <div class="card">
       <div class="card-head">
+        <span class="card-title-icon">${icon('map')}</span>
+        <div><h2>Подложка карты</h2>
+          <div class="card-sub">Настоящая карта под метками игроков на вкладке «Карта»</div></div>
+        <span class="spacer"></span>
+        <button class="btn btn-sm" id="tiles-clear" type="button">${icon('trash')} Очистить кэш</button>
+      </div>
+      <div id="tiles-box"><div class="small faint">Читаю настройки подложки…</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <span class="card-title-icon">${icon('external')}</span>
         <div><h2>Доступ снаружи</h2>
           <div class="card-sub">Проверка по шагам: где обрыв между «панель работает» и «панель открылась
@@ -563,6 +574,7 @@ function bind(server) {
   bindIngame();
   bindAccess();
   bindAuth();
+  bindTiles();
 
   paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
@@ -855,6 +867,89 @@ function openExposedModal(result) {
  * их можно посмотреть (чтобы передать второй ключ коллеге), выпустить заново и
  * закрыть чужие сессии.
  */
+/**
+ * Подложка карты: слой, свой тайл-сервер и кэш.
+ *
+ * Тайлы панель скачивает сама и держит на диске, поэтому карта работает и без
+ * интернета на машине сервера — но первый показ каждого участка требует сети.
+ */
+function bindTiles() {
+  const box = paneRef.querySelector('#tiles-box');
+
+  const render = async () => {
+    let info;
+    try {
+      info = await api.map();
+    } catch (err) {
+      box.innerHTML = `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+        <div>${esc(err.message)}</div></div>`;
+      return;
+    }
+
+    const t = info.tiles;
+    const kb = Math.round((info.cache.bytes || 0) / 1024);
+    const known = info.known
+      ? `Карта <b>${esc(info.world)}</b> — ${info.size} м, слои: ${info.layers.join(', ') || '—'}`
+      : `Карта <b>${esc(info.world || '—')}</b> панели не известна`;
+
+    box.innerHTML = `
+      <div class="small mb">${known}. В кэше ${info.cache.files} тайлов${kb ? ` (${kb} КБ)` : ''}.</div>
+
+      ${info.reason ? `<div class="notice warn mb"><span class="ic">${icon('alert')}</span>
+        <div>${esc(info.reason)}</div></div>` : ''}
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Слой</label>
+          <select id="tiles-layer">
+            <option value="off" ${!t.enabled ? 'selected' : ''}>без подложки — только сетка</option>
+            <option value="topographic" ${t.enabled && t.layer === 'topographic' ? 'selected' : ''}>карта</option>
+            <option value="satellite" ${t.enabled && t.layer === 'satellite' ? 'selected' : ''}>спутник</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Свой тайл-сервер <span class="badge">не обязательно</span></label>
+          <input type="text" id="tiles-url" value="${esc(t.urlTemplate)}"
+                 placeholder="https://сервер/{z}/{x}/{y}.png">
+        </div>
+      </div>
+
+      <div class="hint" style="margin-top:10px">${esc(t.attribution)}. Панель скачивает каждый тайл
+        один раз и дальше отдаёт с диска — чужой сервер не нагружается, а карта работает без интернета.
+        Свой адрес нужен для самодельных карт: поддерживается обычная схема
+        <span class="inline-code">{z}/{x}/{y}</span>, размер тайла 256 пикселей.</div>`;
+
+    box.querySelector('#tiles-layer').addEventListener('change', (e) =>
+      busy(e.currentTarget, async () => {
+        const value = e.currentTarget.value;
+        await api.saveConfig({
+          panel: { map: { tiles: { enabled: value !== 'off', ...(value === 'off' ? {} : { layer: value }) } } }
+        });
+        toast('Подложка обновлена — откройте вкладку «Карта»', 'ok');
+        await render();
+      })
+    );
+
+    box.querySelector('#tiles-url').addEventListener('change', (e) =>
+      busy(e.currentTarget, async () => {
+        await api.saveConfig({ panel: { map: { tiles: { urlTemplate: e.currentTarget.value.trim() } } } });
+        toast('Адрес тайлов сохранён', 'ok');
+        await render();
+      })
+    );
+  };
+
+  paneRef.querySelector('#tiles-clear').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const result = await api.clearMapTiles(true);
+      toast(`Кэш тайлов очищен: ${result.cleared.files} файлов`, 'ok');
+      await render();
+    })
+  );
+
+  render();
+}
+
 function bindAuth() {
   const box = paneRef.querySelector('#auth-box');
   const stateEl = paneRef.querySelector('#auth-state');

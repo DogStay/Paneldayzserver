@@ -192,6 +192,15 @@ function normalize(cfg) {
     }))
     .filter((item) => item.id && item.token);
 
+  // Подложка интерактивной карты. urlTemplate нужен для своих или закрытых
+  // тайл-серверов: если он задан, каталог карт панели не используется.
+  c.panel.map = c.panel.map || {};
+  c.panel.map.tiles = c.panel.map.tiles || {};
+  c.panel.map.tiles.enabled = c.panel.map.tiles.enabled !== false;
+  c.panel.map.tiles.layer = c.panel.map.tiles.layer === 'satellite' ? 'satellite' : 'topographic';
+  c.panel.map.tiles.urlTemplate = String(c.panel.map.tiles.urlTemplate || '').trim();
+  c.panel.map.tiles.attribution = String(c.panel.map.tiles.attribution || '').trim();
+
   c.panel.tls = c.panel.tls || {};
   c.panel.tls.enabled = Boolean(c.panel.tls.enabled);
   c.panel.tls.certFile = cleanPath(c.panel.tls.certFile);

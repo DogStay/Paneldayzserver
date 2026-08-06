@@ -35,6 +35,7 @@ const bridge = require('../services/bridge');
 const auth = require('../services/auth');
 const access = require('../services/access');
 const eventlog = require('../services/eventlog');
+const maptiles = require('../services/maptiles');
 
 const router = express.Router();
 
@@ -642,6 +643,56 @@ router.post(
     res.json({ ...result, ...missions.list(serverIdOf(req)) });
   })
 );
+
+/* ------------------------------------------------- подложка карты (тайлы) */
+
+/**
+ * Панель работает кэширующим посредником для тайлов: браузер просит их у неё,
+ * она один раз забирает их с тайл-сервера и складывает в data/maptiles.
+ * Подробности — в src/services/maptiles.js.
+ */
+
+/** Какой мир сейчас: мод-мост знает точно, иначе берём миссию из настроек. */
+function worldOf(serverId) {
+  const bridgeWorld = bridge.status(serverId).world;
+  if (bridgeWorld) return bridgeWorld;
+
+  const v = config.active(serverId);
+  return v.server.mission || '';
+}
+
+router.get('/map', (req, res) => {
+  const serverId = serverIdOf(req);
+  res.json({ ...maptiles.status(worldOf(serverId)), maps: maptiles.catalogue() });
+});
+
+router.get(
+  '/map/tiles/:layer/:z/:x/:y',
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const { layer, z, x, y } = req.params;
+
+    try {
+      const tile = await maptiles.tile(worldOf(serverId), layer, z, x, parseInt(y, 10));
+
+      res.setHeader('Content-Type', tile.type);
+      // Тайлы не меняются: пусть браузер держит их у себя.
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+      res.end(tile.body);
+    } catch (err) {
+      // Пустой тайл — нормальная ситуация (край карты, дальний зум): 404 без шума.
+      const status =
+        err.code === 'missing' ? 404 : err.code === 'bad-request' ? 400 : err.code === 'no-source' ? 501 : 502;
+      res.status(status).json({ error: err.message });
+    }
+  })
+);
+
+router.delete('/map/tiles', (req, res) => {
+  const serverId = serverIdOf(req);
+  const all = req.query.all === '1';
+  res.json({ cleared: maptiles.clearCache(all ? '' : worldOf(serverId)) });
+});
 
 /* ------------------------------------------------------------------- сервер */
 

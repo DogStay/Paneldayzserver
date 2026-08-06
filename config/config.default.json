@@ -11,6 +11,14 @@
       "trustProxy": false
     },
     "apiTokens": [],
+    "map": {
+      "tiles": {
+        "enabled": true,
+        "layer": "topographic",
+        "urlTemplate": "",
+        "attribution": ""
+      }
+    },
     "tls": {
       "enabled": false,
       "certFile": "",
@@ -32,7 +40,6 @@
     "steamcmdExe": "C:\\SteamCMD\\steamcmd.exe",
     "workshopContentDir": ""
   },
-
   "cftools": {
     "enabled": false,
     "applicationId": "",
@@ -40,7 +47,6 @@
   },
   "activeServerId": null,
   "servers": [],
-
   "serverTemplate": {
     "id": null,
     "name": "DayZ Server",
@@ -70,23 +76,51 @@
       "cpuCount": 0,
       "limitFPS": 0,
       "extraPorts": [
-        { "protocol": "UDP", "from": 2303, "to": 2305, "comment": "Голосовой чат и служебные порты DayZ" },
-        { "protocol": "UDP", "from": 8766, "to": 8766, "comment": "Steam master" },
-        { "protocol": "TCP", "from": 27016, "to": 27016, "comment": "Steam query TCP" }
+        {
+          "protocol": "UDP",
+          "from": 2303,
+          "to": 2305,
+          "comment": "Голосовой чат и служебные порты DayZ"
+        },
+        {
+          "protocol": "UDP",
+          "from": 8766,
+          "to": 8766,
+          "comment": "Steam master"
+        },
+        {
+          "protocol": "TCP",
+          "from": 27016,
+          "to": 27016,
+          "comment": "Steam query TCP"
+        }
       ],
-      "extraArgs": ["-dologs", "-adminlog", "-netlog", "-freezecheck"]
+      "extraArgs": [
+        "-dologs",
+        "-adminlog",
+        "-netlog",
+        "-freezecheck"
+      ]
     },
     "restart": {
       "enabled": false,
       "mode": "interval",
       "intervalHours": 3,
-      "times": ["06:00", "12:00", "18:00", "00:00"],
-      "warnMinutes": [15, 5, 1],
+      "times": [
+        "06:00",
+        "12:00",
+        "18:00",
+        "00:00"
+      ],
+      "warnMinutes": [
+        15,
+        5,
+        1
+      ],
       "announceInGame": true,
       "warnTemplate": "Плановый перезапуск сервера через {minutes} мин. Уберите вещи в безопасное место.",
       "restartTemplate": "Сервер перезапускается. Заходите снова через пару минут."
     },
-
     "ingame": {
       "channel": "auto",
       "battleye": {
@@ -97,7 +131,6 @@
         "configPath": ""
       }
     },
-
     "announcements": {
       "enabled": false,
       "intervalMinutes": 15,

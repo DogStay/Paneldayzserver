@@ -1,0 +1,308 @@
+{
+  "source": "https://github.com/WoozyMasta/dzmap (config.yaml)",
+  "attribution": "Тайлы © Xam.nu — dayz.xam.nu",
+  "maps": {
+    "chernarusplus": {
+      "size": 15360,
+      "aliases": [
+        "chernarus"
+      ],
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/chernarusplus/1.27/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/chernarusplus/1.27/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "enoch": {
+      "size": 12800,
+      "aliases": [
+        "livonia"
+      ],
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/livonia/1.27/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/livonia/1.27/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "sakhal": {
+      "size": 15360,
+      "aliases": [
+        "frostline"
+      ],
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/sakhal/1.27/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/sakhal/1.27/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "alteria": {
+      "size": 8192,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/alteria/1.0/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/alteria/1.0/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "anastara": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/anastara/Jan.15/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/anastara/Jan.15/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "antoria": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/antoria/25.05.18/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/antoria/25.05.18/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "arsteinen": {
+      "size": 15360,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/arsteinen/May.28/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/arsteinen/May.28/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "avalon": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/avalon/25.05.16/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/avalon/25.05.16/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "azalea": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/azalea/25.09.24/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/azalea/25.09.24/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "banov": {
+      "size": 15360,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/banov/24.12.15-1/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/banov/24.12.15-1/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "bitterroot": {
+      "size": 12288,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/bitterroot/Aug.1/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/bitterroot/Aug.1/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "chiemsee": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/chiemsee/2.7/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/chiemsee/2.7/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "deadfall": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/deadfall/25.07.06/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/deadfall/25.07.06/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "deerisle": {
+      "size": 16384,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/deerisle/5.923/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/deerisle/5.923/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "esseker": {
+      "size": 12800,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/esseker/0.58/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/esseker/0.58/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "hashima": {
+      "size": 5120,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/hashima/25.03.30/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/hashima/25.03.30/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "iztek": {
+      "size": 8192,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/iztek/2.0.4/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/iztek/2.0.4/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "malvinas": {
+      "size": 12288,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/malvinas/25.09.17/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/malvinas/25.09.17/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "melkart": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://maps.izurvive.com/maps/Melkart-Top/1.3.0/tiles/{z}/{x}/{y}.webp",
+        "satellite": "https://maps.izurvive.com/maps/Melkart-Sat/1.3.0/tiles/{z}/{x}/{y}.webp"
+      }
+    },
+    "namalsk": {
+      "size": 12800,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/namalsk/May.27/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/namalsk/May.27/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "nhchernobyl": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/nhchernobyl/Mar.13/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/nhchernobyl/Mar.13/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "novikostok": {
+      "size": 15360,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/novikostok/25.11.11/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/novikostok/25.11.11/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "nukezzone": {
+      "size": 15360,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/nukezzone/Mar.13/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/nukezzone/Mar.13/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "nyheim": {
+      "size": 15360,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/nyheim/25.09.22/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/nyheim/25.09.22/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "onforin": {
+      "size": 24576,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/onforin/Apr.8/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/onforin/Apr.8/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "pnw": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/pnw/25.08.28/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/pnw/25.08.28/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "pripyat": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/pripyat/19.08/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/pripyat/19.08/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "raman": {
+      "size": 32768,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/raman/Mar.14/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/raman/Mar.14/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "ros": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/ros/Jul.28/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/ros/Jul.28/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "rostow": {
+      "size": 14336,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/rostow/02.15/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/rostow/02.15/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "sahrani": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/sahrani/25.06.25/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/sahrani/25.06.25/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "stuartisland": {
+      "size": 5120,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/stuartisland/20.04.27/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/stuartisland/20.04.27/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "takistanplus": {
+      "size": 12800,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/takistanplus/1.041/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/takistanplus/1.041/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "valning": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/valning/26.11/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/valning/26.11/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "vela": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/vela/0.5/topographic/{z}/{x}/{y}.jpg",
+        "satellite": "https://static.xam.nu/dayz/maps/vela/0.5/satellite/{z}/{x}/{y}.jpg"
+      }
+    },
+    "visisland": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/visisland/0.04/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/visisland/0.04/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "yiprit": {
+      "size": 20480,
+      "layers": {
+        "topographic": "https://static.xam.nu/dayz/maps/yiprit/31.07/topographic/{z}/{x}/{y}.webp",
+        "satellite": "https://static.xam.nu/dayz/maps/yiprit/31.07/satellite/{z}/{x}/{y}.webp"
+      }
+    },
+    "lux": {
+      "size": 15360,
+      "layers": {
+        "topographic": "https://maps.izurvive.com/maps/Lux-Top/1.0.0/tiles/{z}/{x}/{y}.webp",
+        "satellite": "https://maps.izurvive.com/maps/Lux-Sat/1.0.0/tiles/{z}/{x}/{y}.webp"
+      }
+    },
+    "varlind": {
+      "size": 12800,
+      "layers": {
+        "topographic": "https://maps.izurvive.com/maps/Arland-Top/0.0.0/tiles/{z}/{x}/{y}.webp",
+        "satellite": "https://maps.izurvive.com/maps/Arland-Sat/0.0.0/tiles/{z}/{x}/{y}.webp"
+      }
+    },
+    "swansisland": {
+      "size": 2048,
+      "layers": {
+        "topographic": "https://maps.izurvive.com/maps/SwansIsland-Top/1.0.0/tiles/{z}/{x}/{tms_y}.png",
+        "satellite": "https://maps.izurvive.com/maps/SwansIsland-Sat/1.0.0/tiles/{z}/{x}/{tms_y}.png"
+      }
+    },
+    "greencounty": {
+      "size": 10240,
+      "layers": {
+        "topographic": "https://maps.izurvive.com/maps/GreenCounty-Top/0.0.0/tiles/{z}/{x}/{y}.webp",
+        "satellite": "https://maps.izurvive.com/maps/GreenCounty-Sat/0.0.0/tiles/{z}/{x}/{y}.webp"
+      }
+    },
+    "utes": {
+      "size": 5120,
+      "layers": {
+        "satellite": "https://github.com/BohemiaInteractive/DayZ-Samples/raw/refs/heads/master/Test_Terrain/source/gis_input/sat_lco.tif"
+      }
+    }
+  }
+}
