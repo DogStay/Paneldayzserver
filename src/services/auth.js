@@ -118,11 +118,20 @@ function announce() {
     return;
   }
 
-  logger.info(SOURCE, '─'.repeat(60));
-  logger.info(SOURCE, 'МАСТЕР-КЛЮЧИ ДЛЯ ВХОДА В ПАНЕЛЬ (действуют до перезапуска):');
-  keys.forEach((key, index) => logger.info(SOURCE, `   ${index + 1}.  ${key}`));
-  logger.info(SOURCE, `Сессия живёт ${sessionHours()} ч. Ключи новые при каждом запуске панели.`);
-  logger.info(SOURCE, '─'.repeat(60));
+  /*
+   * Сами ключи печатаются ТОЛЬКО в окно панели, минуя логгер.
+   *
+   * Логгер пишет всё в файл, хранит в памяти и раздаёт в браузер через поток
+   * событий — а его может читать интеграция с токеном «только чтение». Попади
+   * ключи туда, и токен на чтение превратился бы в полный доступ.
+   */
+  console.log('─'.repeat(60));
+  console.log('МАСТЕР-КЛЮЧИ ДЛЯ ВХОДА В ПАНЕЛЬ (действуют до перезапуска):');
+  keys.forEach((key, index) => console.log(`   ${index + 1}.  ${key}`));
+  console.log(`Сессия живёт ${sessionHours()} ч. Ключи новые при каждом запуске панели.`);
+  console.log('─'.repeat(60));
+
+  logger.info(SOURCE, `Мастер-ключи (${keys.length} шт.) напечатаны в окне панели. Сессия: ${sessionHours()} ч.`);
 }
 
 function sessionHours() {
@@ -292,6 +301,15 @@ function middleware() {
 
     if (sessionOf(req)) return next();
 
+    // Сайт и бот ходят не мастер-ключом, а постоянным токеном: мастер-ключи
+    // меняются при каждом запуске панели и для интеграций не годятся.
+    const token = tokenCheck(req);
+    if (token.ok) {
+      req.panelToken = token.token;
+      return next();
+    }
+    if (token.error) return res.status(token.status || 403).json({ error: token.error, auth: 'token' });
+
     // Браузеру отдаём страницу входа, программе — понятный отказ.
     const wantsHtml = String(req.headers.accept || '').includes('text/html');
     if (wantsHtml) {
@@ -299,8 +317,132 @@ function middleware() {
       return res.status(302).end();
     }
 
-    return res.status(401).json({ error: 'Требуется вход по мастер-ключу', auth: 'required' });
+    return res.status(401).json({ error: 'Требуется вход по мастер-ключу или API-токен', auth: 'required' });
   };
+}
+
+/* ------------------------------------------------------------- API-токены */
+
+/**
+ * Токены для интеграций (сайт, Discord-бот, свои скрипты).
+ *
+ * Отличие от мастер-ключей: токен живёт в config.json, переживает перезапуск
+ * панели и отзывается по одному. Область прав всего две, и это осознанно:
+ *   read  — только чтение (GET): статус, игроки, журнал, карта;
+ *   admin — всё, что умеет панель, включая запуск сервера и команды игрокам.
+ */
+const TOKEN_SCOPES = ['read', 'admin'];
+
+/** Когда последнее использование токена записывали на диск. */
+let tokenTouchAt = 0;
+
+function tokenList() {
+  const cfg = config.load();
+  return Array.isArray(cfg.panel.apiTokens) ? cfg.panel.apiTokens : [];
+}
+
+/** Токен из запроса: заголовок или ?token= (у EventSource заголовков нет). */
+function tokenFromRequest(req) {
+  const header = String(req.headers.authorization || '');
+  if (/^Bearer\s+/i.test(header)) return header.replace(/^Bearer\s+/i, '').trim();
+
+  const custom = req.headers['x-panel-token'];
+  if (custom) return String(custom).trim();
+
+  if (req.query && req.query.token) return String(req.query.token).trim();
+  return '';
+}
+
+/**
+ * Проверить токен запроса.
+ * @returns {{ok: boolean, token?: object, error?: string, status?: number}}
+ */
+function tokenCheck(req) {
+  const value = tokenFromRequest(req);
+  if (!value) return { ok: false };
+
+  const found = tokenList().find((item) => {
+    if (!item.token || item.token.length !== value.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(item.token), Buffer.from(value));
+  });
+
+  if (!found) {
+    logger.warn(SOURCE, `Неизвестный API-токен с адреса ${ipOf(req)}`);
+    return { ok: false, error: 'API-токен не найден или отозван', status: 403 };
+  }
+
+  // Токен «read» не должен ничего менять: бот с правами чтения не сможет
+  // случайно перезапустить сервер или выдать предметы.
+  const method = String(req.method || 'GET').toUpperCase();
+  if (found.scope === 'read' && method !== 'GET' && method !== 'HEAD') {
+    return {
+      ok: false,
+      error: `Токену «${found.name}» разрешено только чтение (${method} запрещён)`,
+      status: 403
+    };
+  }
+
+  touchToken(found);
+  return { ok: true, token: { id: found.id, name: found.name, scope: found.scope } };
+}
+
+/** Отметить использование, но не чаще раза в минуту — это запись на диск. */
+function touchToken(token) {
+  const now = Date.now();
+  token.lastUsedAt = now;
+  if (now - tokenTouchAt < 60_000) return;
+
+  tokenTouchAt = now;
+  try {
+    config.updateRoot({ panel: { apiTokens: tokenList() } });
+  } catch (_) {
+    /* не критично */
+  }
+}
+
+/**
+ * Создать токен. Полное значение возвращается один раз — дальше панель
+ * показывает только начало, как это принято с ключами доступа.
+ */
+function createToken(name, scope) {
+  const cleanName = String(name || '').trim().slice(0, 60) || 'интеграция';
+  const cleanScope = TOKEN_SCOPES.includes(scope) ? scope : 'read';
+
+  const token = {
+    id: crypto.randomBytes(4).toString('hex'),
+    name: cleanName,
+    scope: cleanScope,
+    token: `dzp_${crypto.randomBytes(24).toString('base64url')}`,
+    createdAt: Date.now(),
+    lastUsedAt: null
+  };
+
+  config.updateRoot({ panel: { apiTokens: [...tokenList(), token] } });
+  logger.info(SOURCE, `Создан API-токен «${cleanName}» (${cleanScope})`);
+
+  return token;
+}
+
+function revokeToken(id) {
+  const tokens = tokenList();
+  const found = tokens.find((item) => item.id === String(id));
+  if (!found) return { revoked: false };
+
+  config.updateRoot({ panel: { apiTokens: tokens.filter((item) => item.id !== String(id)) } });
+  logger.warn(SOURCE, `API-токен «${found.name}» отозван`);
+  return { revoked: true, name: found.name };
+}
+
+/** Список токенов для интерфейса: сами значения не отдаём. */
+function publicTokens() {
+  return tokenList().map((item) => ({
+    id: item.id,
+    name: item.name,
+    scope: item.scope,
+    createdAt: item.createdAt,
+    lastUsedAt: item.lastUsedAt,
+    preview: `${String(item.token || '').slice(0, 10)}…`
+  }));
 }
 
 /** Состояние входа для страницы логина и интерфейса. */
@@ -398,6 +540,12 @@ module.exports = {
   settings,
   middleware,
   login,
+  // API-токены для интеграций
+  createToken,
+  revokeToken,
+  publicTokens,
+  tokenCheck,
+  TOKEN_SCOPES,
   status,
   generate,
   announce,

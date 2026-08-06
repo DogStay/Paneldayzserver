@@ -945,10 +945,91 @@ function bindAuth() {
           : `<div class="small faint">Активных сессий нет.</div>`}
       </div>
 
-      <div class="row wrap">
+      <div class="row wrap mb">
         <button class="btn" id="auth-rotate" type="button">${icon('refresh')} Выпустить новые ключи</button>
         <button class="btn btn-danger" id="auth-close-all" type="button">${icon('x')} Закрыть все сессии</button>
+      </div>
+
+      <div class="card-sub mb" style="margin-top:18px">Токены для интеграций</div>
+      <div class="notice info mb"><span class="ic">${icon('link')}</span>
+        <div>Сайту и Discord-боту мастер-ключи не подходят: они меняются при каждом запуске панели.
+        Для них — постоянные токены: живут в конфиге, отзываются по одному.
+        <span class="inline-code">read</span> — только чтение, <span class="inline-code">admin</span> — всё.</div></div>
+
+      <div class="mod-list mb" id="token-list"></div>
+
+      <div class="row wrap">
+        <input type="text" id="token-name" placeholder="название: сайт, Discord-бот" style="width:220px">
+        <select id="token-scope" style="width:180px">
+          <option value="read">read — только чтение</option>
+          <option value="admin">admin — полный доступ</option>
+        </select>
+        <button class="btn btn-primary" id="token-create" type="button">${icon('plus')} Создать токен</button>
       </div>`;
+
+    const tokenBox = box.querySelector('#token-list');
+    const renderTokens = async () => {
+      let data = { tokens: [] };
+      try {
+        data = await api.authTokens();
+      } catch (err) {
+        tokenBox.innerHTML = `<div class="small faint">${esc(err.message)}</div>`;
+        return;
+      }
+
+      tokenBox.innerHTML = data.tokens.length
+        ? data.tokens
+            .map(
+              (t) => `
+                <div class="mod-row">
+                  <div class="mod-thumb ph">${icon('link')}</div>
+                  <div class="mod-main">
+                    <div class="mod-name">${esc(t.name)} <span class="badge ${t.scope === 'admin' ? 'warn' : ''}">${esc(t.scope)}</span></div>
+                    <div class="mod-meta">
+                      <span style="font-family:var(--mono)">${esc(t.preview)}</span>
+                      ${t.createdAt ? `<span>создан ${esc(fmtDate(t.createdAt))}</span>` : ''}
+                      <span>${t.lastUsedAt ? `использован ${esc(fmtDate(t.lastUsedAt))}` : 'ещё не использовался'}</span>
+                    </div>
+                  </div>
+                  <div class="mod-actions">
+                    <button class="btn btn-sm btn-danger" data-revoke="${esc(t.id)}">Отозвать</button>
+                  </div>
+                </div>`
+            )
+            .join('')
+        : '<div class="small faint">Токенов пока нет.</div>';
+
+      for (const btn of tokenBox.querySelectorAll('[data-revoke]')) {
+        btn.addEventListener('click', (e) =>
+          busy(e.currentTarget, async () => {
+            const yes = await confirmDialog({
+              title: 'Отозвать токен?',
+              message: 'Интеграция, которая им пользуется, сразу потеряет доступ к панели.',
+              confirmText: 'Отозвать',
+              danger: true
+            });
+            if (!yes) return;
+
+            await api.authRevokeToken(e.currentTarget.dataset.revoke);
+            toast('Токен отозван', 'ok');
+            await renderTokens();
+          })
+        );
+      }
+    };
+    renderTokens();
+
+    box.querySelector('#token-create').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const name = box.querySelector('#token-name').value.trim();
+        const scope = box.querySelector('#token-scope').value;
+        const created = await api.authCreateToken(name, scope);
+
+        box.querySelector('#token-name').value = '';
+        showTokenModal(created);
+        await renderTokens();
+      })
+    );
 
     for (const btn of box.querySelectorAll('[data-copy]')) {
       btn.addEventListener('click', async (e) => {
@@ -1010,6 +1091,49 @@ function bindAuth() {
   };
 
   render();
+}
+
+/**
+ * Созданный токен показывается один раз: дальше в панели видно только начало
+ * строки, как это принято с ключами доступа.
+ */
+function showTokenModal(created) {
+  modal({
+    title: 'Токен создан',
+    subtitle: `${created.name} · ${created.scope}`,
+    icon: 'link',
+    wide: true,
+    body: `
+      <div class="col" style="gap:14px">
+        <div class="notice warn"><span class="ic">${icon('alert')}</span>
+          <div>Скопируйте его сейчас — панель больше не покажет значение целиком.</div></div>
+
+        <div class="field">
+          <label>Токен</label>
+          <input type="text" id="token-value" value="${esc(created.token)}" readonly
+                 style="font-family:var(--mono);font-size:13px">
+        </div>
+
+        <div class="field">
+          <label>Как им пользоваться</label>
+          <div class="inv-box" style="font-family:var(--mono);font-size:12px">
+            curl -H "Authorization: Bearer ${esc(created.token)}" http://адрес:порт/api/status<br><br>
+            для потока событий (EventSource заголовки не умеет):<br>
+            /api/stream?token=${esc(created.token)}
+          </div>
+          <div class="hint">Полное описание для сайта и бота — docs/integration-prompt.md в репозитории.</div>
+        </div>
+      </div>`,
+    footer: `<span class="spacer"></span><button class="btn btn-primary" data-close>Готово</button>`,
+    onMount: (m) => {
+      const input = m.body.querySelector('#token-value');
+      input.select();
+      navigator.clipboard.writeText(created.token).then(
+        () => toast('Токен скопирован в буфер', 'ok'),
+        () => {}
+      );
+    }
+  });
 }
 
 /* ------------------------------------------------------ сообщения в игру */

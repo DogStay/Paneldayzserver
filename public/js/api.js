@@ -53,6 +53,9 @@ export const api = {
   authKeys: () => request('GET', '/auth/keys'),
   authRotate: () => request('POST', '/auth/rotate', {}),
   authSessions: () => request('GET', '/auth/sessions'),
+  authTokens: () => request('GET', '/auth/tokens'),
+  authCreateToken: (name, scope) => request('POST', '/auth/tokens', { name, scope }),
+  authRevokeToken: (id) => request('DELETE', `/auth/tokens/${encodeURIComponent(id)}`),
   authCloseSession: (id) => request('DELETE', `/auth/sessions/${encodeURIComponent(id)}`),
   authLogout: () => request('POST', '/auth/logout', {}),
 

@@ -179,6 +179,19 @@ function normalize(cfg) {
   c.panel.auth.sessionHours = clamp(toInt(c.panel.auth.sessionHours, 12), 1, 720);
   c.panel.auth.trustProxy = Boolean(c.panel.auth.trustProxy);
 
+  // Токены интеграций (сайт, Discord-бот). Живут в конфиге, а не в памяти:
+  // им нужно переживать перезапуск панели.
+  c.panel.apiTokens = (Array.isArray(c.panel.apiTokens) ? c.panel.apiTokens : [])
+    .map((item) => ({
+      id: String(item.id || '').trim(),
+      name: String(item.name || 'интеграция').slice(0, 60),
+      scope: item.scope === 'admin' ? 'admin' : 'read',
+      token: String(item.token || '').trim(),
+      createdAt: toInt(item.createdAt, 0) || null,
+      lastUsedAt: toInt(item.lastUsedAt, 0) || null
+    }))
+    .filter((item) => item.id && item.token);
+
   c.panel.tls = c.panel.tls || {};
   c.panel.tls.enabled = Boolean(c.panel.tls.enabled);
   c.panel.tls.certFile = cleanPath(c.panel.tls.certFile);
@@ -499,6 +512,13 @@ function publicView() {
 
   copy.cftools.secret = '';
   copy.cftools.hasSecret = Boolean(cfg.cftools.secret);
+
+  // Значения API-токенов наружу не отдаём даже вошедшему администратору:
+  // для этого есть отдельный маршрут со списком и превью.
+  copy.panel.apiTokens = (copy.panel.apiTokens || []).map((item) => ({
+    ...item,
+    token: `${String(item.token || '').slice(0, 10)}…`
+  }));
 
   copy.servers = copy.servers.map((s) => {
     const v = view(s.id);

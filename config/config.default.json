@@ -10,6 +10,7 @@
       "sessionHours": 12,
       "trustProxy": false
     },
+    "apiTokens": [],
     "tls": {
       "enabled": false,
       "certFile": "",

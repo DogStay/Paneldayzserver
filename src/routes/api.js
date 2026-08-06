@@ -40,6 +40,18 @@ const router = express.Router();
 
 const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
+/*
+ * Управление входом — только для живой сессии по мастер-ключу. Иначе токен с
+ * правами чтения смог бы забрать мастер-ключи и получить полный доступ, а
+ * токен admin — выписать себе новые токены.
+ */
+function sessionOnly(req, res, next) {
+  if (!req.panelToken) return next();
+  return res
+    .status(403)
+    .json({ error: 'Управление ключами и токенами доступно только после входа по мастер-ключу', auth: 'session' });
+}
+
 /** id сервера из запроса: ?serverId=… или активный. */
 function serverIdOf(req) {
   const id = req.query.serverId || (req.body && req.body.serverId);
@@ -113,24 +125,47 @@ router.post('/auth/logout', (req, res) => {
 });
 
 /** Ключи текущего запуска — чтобы передать второй ключ коллеге. */
-router.get('/auth/keys', (req, res) => res.json({ keys: auth.listKeys(), issuedAt: auth.status(req).keysIssuedAt }));
+router.get('/auth/keys', sessionOnly, (req, res) => res.json({ keys: auth.listKeys(), issuedAt: auth.status(req).keysIssuedAt }));
 
 /** Выпустить новые ключи, не перезапуская панель. Открытые сессии остаются. */
-router.post('/auth/rotate', (req, res) => {
+router.post('/auth/rotate', sessionOnly, (req, res) => {
   auth.generate('запрос из панели');
   auth.announce();
   res.json({ keys: auth.listKeys() });
 });
 
+/* ---------------------------------------------- токены для интеграций */
+
+/**
+ * Токены для сайта и Discord-бота. Мастер-ключи для этого не годятся: они
+ * меняются при каждом запуске панели. Контракт для интеграций описан в
+ * docs/integration-prompt.md.
+ */
+router.get('/auth/tokens', sessionOnly, (req, res) => res.json({ tokens: auth.publicTokens(), scopes: auth.TOKEN_SCOPES }));
+
+router.post(
+  '/auth/tokens',
+  sessionOnly,
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const token = auth.createToken(body.name, body.scope);
+
+    // Полное значение отдаётся один раз — дальше только начало строки.
+    res.json({ token: token.token, id: token.id, name: token.name, scope: token.scope });
+  })
+);
+
+router.delete('/auth/tokens/:id', sessionOnly, (req, res) => res.json(auth.revokeToken(req.params.id)));
+
 /** Кто сейчас в панели. */
-router.get('/auth/sessions', (req, res) => {
+router.get('/auth/sessions', sessionOnly, (req, res) => {
   const current = auth.sessionOf(req);
   res.json({
     sessions: auth.listSessions().map((s) => ({ ...s, current: current ? current.token.slice(0, 8) === s.id : false }))
   });
 });
 
-router.delete('/auth/sessions/:id', (req, res) => res.json({ closed: auth.revoke(req.params.id) }));
+router.delete('/auth/sessions/:id', sessionOnly, (req, res) => res.json({ closed: auth.revoke(req.params.id) }));
 
 router.get(
   '/status',
