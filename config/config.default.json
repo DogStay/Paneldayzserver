@@ -68,7 +68,20 @@
       "mode": "interval",
       "intervalHours": 3,
       "times": ["06:00", "12:00", "18:00", "00:00"],
-      "warnMinutes": [15, 5, 1]
+      "warnMinutes": [15, 5, 1],
+      "announceInGame": true,
+      "warnTemplate": "Плановый перезапуск сервера через {minutes} мин. Уберите вещи в безопасное место.",
+      "restartTemplate": "Сервер перезапускается. Заходите снова через пару минут."
+    },
+
+    "announcements": {
+      "enabled": false,
+      "intervalMinutes": 15,
+      "order": "rotate",
+      "messages": [
+        "Вы играете на сервере {server} — карта {map}.",
+        "До планового перезапуска: {restart}."
+      ]
     },
     "features": {
       "autoFirewall": true,

@@ -22,6 +22,7 @@ export const state = {
   mods: { mods: [], orphans: [], localCandidates: [] },
   jobs: new Map(),
   restarts: {},
+  announcements: {},
   lastLogId: 0
 };
 
@@ -55,6 +56,7 @@ export async function refreshStatus() {
   state.problems = data.problems;
   state.steamcmd = data.steamcmd;
   state.restarts = data.restarts || {};
+  state.announcements = data.announcements || {};
 
   for (const job of data.jobs || []) state.jobs.set(job.id, job);
 
@@ -93,6 +95,9 @@ export const activeStatus = () =>
 export const statusOf = (id) => state.statuses[id] || { status: 'stopped', uptimeSec: 0 };
 
 export const restartOf = (id) => state.restarts[id] || { enabled: false, nextAt: null, secondsLeft: null };
+
+export const announcementsOf = (id) =>
+  state.announcements[id] || { enabled: false, count: 0, nextAt: null, secondsLeft: null };
 
 /* ---------------------------------------------------------------- SSE */
 
@@ -159,6 +164,16 @@ export function connectStream() {
 
   source.addEventListener('restart-warning', (e) => {
     emit('restart-warning', JSON.parse(e.data));
+  });
+
+  source.addEventListener('announcements', (e) => {
+    state.announcements = JSON.parse(e.data);
+    emit('announcements', state.announcements);
+  });
+
+  // Объявление ушло в игру — панель показывает то же, что увидели игроки.
+  source.addEventListener('announcement', (e) => {
+    emit('announcement', JSON.parse(e.data));
   });
 
   source.addEventListener('servers', (e) => {

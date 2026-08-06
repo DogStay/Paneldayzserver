@@ -28,6 +28,8 @@ const cftools = require('../services/cftools');
 const serverProcess = require('../services/serverProcess');
 const diagnostics = require('../services/diagnostics');
 const scheduler = require('../services/scheduler');
+const announcer = require('../services/announcer');
+const ingame = require('../services/ingame');
 
 const router = express.Router();
 
@@ -60,10 +62,15 @@ router.get(
       statuses: serverProcess.allStatuses(),
       server: active ? serverProcess.getStatus(active.id) : null,
       problems: active
-        ? [...serverProcess.validate(active.id), ...scheduler.warnings(active.id)]
+        ? [
+            ...serverProcess.validate(active.id),
+            ...scheduler.warnings(active.id),
+            ...announcer.warnings(active.id)
+          ]
         : [],
       restart: active ? scheduler.state(active.id) : null,
       restarts: scheduler.allStates(),
+      announcements: announcer.allStates(),
       steamcmd: steamcmd.health(),
       jobs: jobs.active(),
       panel: {
@@ -555,6 +562,44 @@ router.post(
   })
 );
 
+/* ------------------------------------------------------- объявления в чат */
+
+/** Список объявлений, расписание отправки и готовность канала доставки. */
+router.get('/announcements', (req, res) => {
+  const serverId = serverIdOf(req);
+  const v = config.active(serverId);
+
+  res.json({
+    ...v.announcements,
+    state: announcer.state(serverId),
+    delivery: ingame.available(serverId),
+    maxLength: ingame.MAX_LENGTH,
+    warnings: announcer.warnings(serverId)
+  });
+});
+
+/** Отправить объявление сейчас: по номеру из списка или произвольный текст. */
+router.post(
+  '/announcements/send',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const result = await announcer.sendNow(serverIdOf(req), { index: body.index, text: body.text });
+    res.json({ ...result, state: announcer.state(serverIdOf(req)) });
+  })
+);
+
+/** Предпросмотр подстановок ({server}, {map}, {restart}) без отправки. */
+router.post('/announcements/preview', (req, res) => {
+  const serverId = serverIdOf(req);
+  const texts = Array.isArray((req.body || {}).texts) ? req.body.texts : [];
+  res.json({
+    preview: texts.map((text) => {
+      const rendered = ingame.render(text, serverId);
+      return { text: rendered, length: rendered.length, tooLong: rendered.length > ingame.MAX_LENGTH };
+    })
+  });
+});
+
 /* ---------------------------------------------------------------- CFTools */
 
 /*
@@ -706,6 +751,7 @@ router.get('/stream', (req, res) => {
   jobs.active().forEach((job) => send('job', job));
 
   send('restarts', scheduler.allStates());
+  send('announcements', announcer.allStates());
 
   const offLog = logger.subscribe((entry) => send('log', entry));
   const onStatus = (status) => send('status', status);
@@ -713,12 +759,16 @@ router.get('/stream', (req, res) => {
   const onServers = () => send('servers', serversOverview());
   const onPlan = (plan) => send('restart-plan', plan);
   const onWarning = (warning) => send('restart-warning', warning);
+  const onAnnouncements = (states) => send('announcements', states);
+  const onAnnouncement = (a) => send('announcement', a);
 
   bus.on('status', onStatus);
   bus.on('job', onJob);
   bus.on('servers', onServers);
   bus.on('restart-plan', onPlan);
   bus.on('restart-warning', onWarning);
+  bus.on('announcements', onAnnouncements);
+  bus.on('announcement', onAnnouncement);
 
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 25_000);
 
@@ -730,6 +780,8 @@ router.get('/stream', (req, res) => {
     bus.off('servers', onServers);
     bus.off('restart-plan', onPlan);
     bus.off('restart-warning', onWarning);
+    bus.off('announcements', onAnnouncements);
+    bus.off('announcement', onAnnouncement);
   });
 });
 

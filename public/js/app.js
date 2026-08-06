@@ -143,6 +143,9 @@ async function init() {
     else toast(`«${w.serverName}»: перезапуск через ${w.minutes} мин.`, 'warn', 12000);
   });
 
+  // Объявления, ушедшие игрокам, видно и в панели — удобно проверять текст.
+  on('announcement', (a) => toast(`В чат сервера: ${a.text}`, 'info', 8000));
+
   // Разворачиваем консоль, когда начинается что-то длительное.
   on('job', (job) => {
     if (job.status === 'running' && (job.type === 'install-server' || job.type === 'download-mods')) openConsole();

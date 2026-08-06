@@ -92,6 +92,10 @@ export const api = {
   missions: () => request('GET', '/missions'),
   selectMission: (mission, force) => request('POST', '/missions/select', { mission, force: Boolean(force) }),
 
+  announcements: () => request('GET', '/announcements'),
+  sendAnnouncement: (body) => request('POST', '/announcements/send', body || {}),
+  previewAnnouncements: (texts) => request('POST', '/announcements/preview', { texts }),
+
   /* CFTools Cloud — работают только при включённой интеграции */
   cfStatus: () => request('GET', '/cftools/status'),
   cfTest: () => request('POST', '/cftools/test', {}),

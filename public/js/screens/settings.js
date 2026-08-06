@@ -7,7 +7,7 @@
  */
 
 import { api } from '../api.js';
-import { state, activeServer, refreshConfig, refreshServers, refreshStatus } from '../store.js';
+import { state, activeServer, announcementsOf, refreshConfig, refreshServers, refreshStatus } from '../store.js';
 import { esc, icon, toast, busy, modal } from '../ui.js';
 
 let paneRef = null;
@@ -44,6 +44,7 @@ function render(s, cfg) {
   const sv = s.server;
   const f = s.features;
   const r = s.restart;
+  const an = s.announcements || { enabled: false, intervalMinutes: 15, order: 'rotate', messages: [] };
 
   return `
     <div class="card">
@@ -140,8 +141,29 @@ function render(s, cfg) {
           <label>Предупреждать за, минут</label>
           <input type="text" data-special="warn" value="${esc((r.warnMinutes || []).join(', '))}"
                  placeholder="15, 5, 1">
-          <div class="hint">Панель напишет в лог и покажет уведомление. Оповещения игрокам в игре
-            требуют RCON и пока не поддерживаются.</div>
+          <div class="hint">Панель напишет в лог, покажет уведомление и — если включено ниже —
+            предупредит игроков в игре.</div>
+        </div>
+      </div>
+
+      <label class="switch" style="margin-top:18px">
+        <input type="checkbox" data-p="restart.announceInGame" ${r.announceInGame ? 'checked' : ''}>
+        <span class="track"></span><span class="switch-text">Предупреждать игроков в игре
+          <small>Сообщения уходят в чат сервера через CFTools Cloud — интеграция должна быть включена
+            и настроена, у DayZ другого канала для этого нет</small></span>
+      </label>
+
+      <div class="form-grid" style="margin-top:16px">
+        <div class="field">
+          <label>Текст предупреждения</label>
+          <input type="text" data-p="restart.warnTemplate" value="${esc(r.warnTemplate || '')}" maxlength="256">
+          <div class="hint">Подстановки: <span class="inline-code">{minutes}</span> — сколько минут осталось,
+            <span class="inline-code">{server}</span>, <span class="inline-code">{map}</span></div>
+        </div>
+        <div class="field">
+          <label>Текст в момент перезапуска</label>
+          <input type="text" data-p="restart.restartTemplate" value="${esc(r.restartTemplate || '')}" maxlength="256">
+          <div class="hint">Уходит игрокам за пару секунд до остановки сервера</div>
         </div>
       </div>
 
@@ -306,6 +328,56 @@ function render(s, cfg) {
 
     <div class="card">
       <div class="card-head">
+        <span class="card-title-icon">${icon('users')}</span>
+        <div><h2>Объявления в чат</h2>
+          <div class="card-sub">Сообщения игрокам по кругу: правила, Discord, время до перезапуска —
+            сколько угодно строк</div></div>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" data-p="announcements.enabled" ${an.enabled ? 'checked' : ''}>
+        <span class="track"></span><span class="switch-text">Отправлять объявления в игру
+          <small>Идут тем же каналом, что и предупреждения о перезапуске — через CFTools Cloud.
+            Отсчёт только пока сервер работает</small></span>
+      </label>
+
+      <div class="form-grid" style="margin-top:16px">
+        <div class="field">
+          <label>Интервал, минут</label>
+          <input type="number" data-p="announcements.intervalMinutes" value="${an.intervalMinutes}"
+                 min="1" max="1440">
+          <div class="hint">Первое объявление — через интервал после запуска сервера</div>
+        </div>
+        <div class="field">
+          <label>Порядок</label>
+          <select data-p="announcements.order">
+            <option value="rotate" ${an.order === 'rotate' ? 'selected' : ''}>По кругу, по порядку</option>
+            <option value="random" ${an.order === 'random' ? 'selected' : ''}>В случайном порядке</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:16px">
+        <label>Сообщения <span class="badge">одно на строку</span>
+          <span class="badge" id="ann-count">${(an.messages || []).length}</span></label>
+        <textarea data-special="announcements" rows="7" spellcheck="false"
+                  placeholder="Вы играете на сервере {server} — карта {map}.
+До планового перезапуска: {restart}.
+Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</textarea>
+        <div class="hint">Подстановки: <span class="inline-code">{server}</span> — название сервера,
+          <span class="inline-code">{map}</span> — карта, <span class="inline-code">{restart}</span> — время
+          до планового перезапуска. Ограничение CFTools — 256 символов на сообщение.</div>
+      </div>
+
+      <div class="row wrap" style="margin-top:14px">
+        <button class="btn" id="ann-preview" type="button">${icon('search')} Предпросмотр</button>
+        <button class="btn btn-primary" id="ann-send" type="button">${icon('users')} Отправить первое сейчас</button>
+        <span class="small faint" id="ann-state">${announcementHint(s.id)}</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <span class="card-title-icon">${icon('link')}</span>
         <div><h2>CFTools Cloud</h2>
           <div class="card-sub">Необязательно. Пока выключено — панель никуда не обращается и работает как обычно</div></div>
@@ -401,6 +473,7 @@ function bind(server) {
   syncMode();
 
   paneRef.querySelector('#mission-pick').addEventListener('click', () => openMissionPicker());
+  bindAnnouncements();
 
   paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
@@ -458,6 +531,12 @@ function bind(server) {
       }
       serverPatch.restart.warnMinutes = parseMinutes(paneRef.querySelector('[data-special="warn"]').value);
 
+      // Объявления: каждая строка textarea — отдельное сообщение.
+      serverPatch.announcements = serverPatch.announcements || {};
+      serverPatch.announcements.messages = parseAnnouncements(
+        paneRef.querySelector('[data-special="announcements"]').value
+      );
+
       if (serverPatch.restart.enabled && !serverPatch.server.timePersistent) {
         toast('Автоперезапуск включён без сохранения игрового времени — оно будет сбрасываться', 'warn', 9000);
       }
@@ -483,6 +562,77 @@ function bind(server) {
       paneRef.querySelector('#set-status').textContent = `сохранено в ${new Date().toLocaleTimeString('ru-RU')}`;
       toast('Настройки сохранены', 'ok');
       await load();
+    })
+  );
+}
+
+/* ----------------------------------------------------- объявления в чат */
+
+/** Подпись под кнопками: когда уйдёт следующее объявление. */
+function announcementHint(serverId) {
+  const st = announcementsOf(serverId);
+  if (!st.enabled) return 'объявления выключены';
+  if (!st.count) return 'список сообщений пуст';
+  if (st.secondsLeft === null) return 'отсчёт начнётся, когда сервер запустится';
+
+  const minutes = Math.ceil(st.secondsLeft / 60);
+  return `следующее объявление примерно через ${minutes} мин. (сообщений: ${st.count})`;
+}
+
+/** Строки из textarea -> список сообщений. */
+function parseAnnouncements(text) {
+  return String(text)
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function bindAnnouncements() {
+  const area = paneRef.querySelector('[data-special="announcements"]');
+  const counter = paneRef.querySelector('#ann-count');
+
+  const sync = () => {
+    counter.textContent = String(parseAnnouncements(area.value).length);
+  };
+  area.addEventListener('input', sync);
+  sync();
+
+  paneRef.querySelector('#ann-preview').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const texts = parseAnnouncements(area.value);
+      if (!texts.length) return toast('Сначала впишите хотя бы одно сообщение', 'warn');
+
+      const { preview } = await api.previewAnnouncements(texts);
+      modal({
+        title: 'Как это увидят игроки',
+        subtitle: 'Подстановки уже раскрыты',
+        icon: 'users',
+        wide: true,
+        body: `<div class="col" style="gap:10px">
+          ${preview
+            .map(
+              (p, i) => `
+                <div class="notice ${p.tooLong ? 'err' : 'info'}">
+                  <span class="ic">${icon(p.tooLong ? 'alert' : 'users')}</span>
+                  <div><b>№${i + 1}</b> · ${p.length} символов${p.tooLong ? ' — слишком длинно, не отправится' : ''}<br>
+                  ${esc(p.text)}</div>
+                </div>`
+            )
+            .join('')}
+        </div>`,
+        footer: `<span class="spacer"></span><button class="btn" data-close>Закрыть</button>`
+      });
+    })
+  );
+
+  paneRef.querySelector('#ann-send').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const texts = parseAnnouncements(area.value);
+      if (!texts.length) return toast('Сначала впишите хотя бы одно сообщение', 'warn');
+
+      // Отправляем текстом, а не номером: так кнопка работает и до сохранения.
+      const result = await api.sendAnnouncement({ text: texts[0] });
+      toast(`Отправлено игрокам: ${result.text}`, 'ok', 9000);
     })
   );
 }

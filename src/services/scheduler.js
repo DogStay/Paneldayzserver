@@ -22,6 +22,7 @@ const logger = require('../logger');
 const bus = require('../events');
 const jobs = require('./jobs');
 const serverProcess = require('./serverProcess');
+const ingame = require('./ingame');
 
 const SOURCE = 'restart';
 const TICK_MS = 10_000;
@@ -154,11 +155,25 @@ function tick() {
         st.warned.add(warn);
         logger.warn(SOURCE, `«${server.name}»: перезапуск через ${warn} мин.`, { serverId: server.id });
         bus.emit('restart-warning', { serverId: server.id, serverName: server.name, minutes: warn });
+        announce(server, restart.warnTemplate, { minutes: warn }, `предупреждение за ${warn} мин.`);
       }
     }
 
     if (now >= st.nextAt) trigger(server);
   }
+}
+
+/**
+ * Предупредить игроков в игре.
+ *
+ * Возвращает промис, но вызывающему не обязательно его ждать: ingame.say()
+ * не бросает исключений и сам пишет в лог, если доставить не удалось (например,
+ * интеграция с CFTools выключена — тогда предупреждения остаются только в
+ * панели и логе, как было раньше).
+ */
+function announce(server, template, extra, label) {
+  if (!server.restart.announceInGame || !template) return Promise.resolve({ sent: false });
+  return ingame.say(server.id, ingame.render(template, server.id, extra), { label });
 }
 
 function trigger(server) {
@@ -173,15 +188,31 @@ function trigger(server) {
   logger.info(SOURCE, `«${server.name}»: плановый перезапуск начался`, { serverId: server.id });
   bus.emit('restart-warning', { serverId: server.id, serverName: server.name, minutes: 0 });
 
-  jobs.run(
-    { type: 'restart-server', title: `Плановый перезапуск «${server.name}»`, serverId: server.id },
-    async (job) =>
-      config.withServer(server.id, () =>
-        serverProcess.restart(server.id, {
-          onProgress: (p) => jobs.update(job.id, { progress: p.percent, step: p.step })
-        })
-      )
+  // Последнее сообщение должно уйти игрокам раньше, чем сервер начнёт
+  // останавливаться, — иначе никто его не увидит. Ждём отправку, но не дольше
+  // пяти секунд: недоступный CFTools не должен задерживать перезапуск.
+  const goodbye = announce(
+    server,
+    server.restart.restartTemplate,
+    { minutes: 0 },
+    'сообщение о начале перезапуска'
   );
+  const timeout = new Promise((resolve) => {
+    const t = setTimeout(resolve, 5000);
+    if (t.unref) t.unref();
+  });
+
+  Promise.race([goodbye, timeout]).then(() => {
+    jobs.run(
+      { type: 'restart-server', title: `Плановый перезапуск «${server.name}»`, serverId: server.id },
+      async (job) =>
+        config.withServer(server.id, () =>
+          serverProcess.restart(server.id, {
+            onProgress: (p) => jobs.update(job.id, { progress: p.percent, step: p.step })
+          })
+        )
+    );
+  });
 
   // Дальше расписание пересчитается от нового времени старта; снимаем флаг,
   // когда сервер поднимется или окончательно останется остановленным.
@@ -239,6 +270,14 @@ function warnings(serverId) {
   }
   if (v.restart.mode === 'schedule' && !v.restart.times.length) {
     out.push('Выбран режим «по часам», но ни одно время не задано.');
+  }
+  if (v.restart.announceInGame) {
+    const ready = ingame.available(serverId);
+    if (!ready.ok) {
+      out.push(`Предупреждения о перезапуске не дойдут до игроков в игре: ${ready.reason}.`);
+    } else if (!v.restart.warnTemplate) {
+      out.push('Предупреждения в игру включены, но текст предупреждения пуст.');
+    }
   }
 
   return out;

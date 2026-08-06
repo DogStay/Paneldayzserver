@@ -18,6 +18,7 @@ const api = require('./routes/api');
 const serverProcess = require('./services/serverProcess');
 const diagnostics = require('./services/diagnostics');
 const scheduler = require('./services/scheduler');
+const announcer = require('./services/announcer');
 
 const cfg = config.load();
 logger.setMaxLines(cfg.panel.logBufferLines);
@@ -67,6 +68,7 @@ const httpServer = app.listen(port, host, () => {
     }
   }
   scheduler.start();
+  announcer.start();
   logger.info('panel', '═'.repeat(60));
 });
 
@@ -85,6 +87,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   logger.info('panel', `Получен ${signal}, завершаю работу…`);
   scheduler.stop();
+  announcer.stop();
   await serverProcess.shutdown();
   httpServer.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();

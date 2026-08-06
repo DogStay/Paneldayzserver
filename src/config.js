@@ -216,6 +216,20 @@ function normalize(cfg) {
         .filter(Boolean)
     )].sort();
 
+    // Предупреждения о перезапуске игрокам в игру (через CFTools).
+    s.restart.announceInGame = s.restart.announceInGame !== false;
+    s.restart.warnTemplate = String(s.restart.warnTemplate || '').trim();
+    s.restart.restartTemplate = String(s.restart.restartTemplate || '').trim();
+
+    // Периодические объявления в чат. Сообщений может быть сколько угодно.
+    s.announcements = s.announcements || {};
+    s.announcements.enabled = Boolean(s.announcements.enabled);
+    s.announcements.intervalMinutes = clamp(toNum(s.announcements.intervalMinutes, 15), 1, 1440);
+    s.announcements.order = s.announcements.order === 'random' ? 'random' : 'rotate';
+    s.announcements.messages = (Array.isArray(s.announcements.messages) ? s.announcements.messages : [])
+      .map((text) => String(text).replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+
     s.restart.warnMinutes = [...new Set(
       (Array.isArray(s.restart.warnMinutes) ? s.restart.warnMinutes : [])
         .map((n) => toInt(n, 0))
@@ -397,6 +411,7 @@ function view(serverId) {
     cftools: { ...cfg.cftools, ...instance.cftools },
     server: instance.server,
     restart: instance.restart,
+    announcements: instance.announcements,
     features: instance.features,
     mods: instance.mods
   };
