@@ -1,37 +1,70 @@
 /**
  * Сборка JSON руками.
  *
- * Готового сериализатора произвольных структур в Enforce нет, а ник игрока или
- * текст чата вполне может содержать кавычки, обратные слэши и переводы строк —
- * без экранирования такой JSON панель не разберёт. Поэтому все строки идут
- * только через PanelJson.Str().
+ * Главная особенность: в файле нет ни одной escape-последовательности.
+ * Парсер Enforce ломается на литерале вида «кавычка внутри кавычек»
+ * (CParser: quoted string not closed), поэтому кавычка, обратный слэш и
+ * переводы строк собираются из ASCII-кодов через int.AsciiToString() —
+ * штатную функцию движка. Заодно это снимает вопрос «а поддерживает ли
+ * конкретная версия игры такое экранирование».
+ *
+ * Весь JSON мода собирается только через эти помощники: ник игрока или текст
+ * чата вполне может содержать кавычки и переводы строк, и без экранирования
+ * панель такой ответ не разберёт.
  */
 class PanelJson
 {
+    private static string s_Quote;
+    private static string s_Slash;
+    private static string s_NewLine;
+    private static string s_Return;
+    private static string s_Tab;
+
+    /** Символы, которые нельзя записать литералом. Считаются один раз. */
+    private static void Init()
+    {
+        if (s_Quote != "") return;
+
+        int quote = 34;
+        int slash = 92;
+        int newLine = 10;
+        int carriage = 13;
+        int tab = 9;
+
+        s_Quote = quote.AsciiToString();
+        s_Slash = slash.AsciiToString();
+        s_NewLine = newLine.AsciiToString();
+        s_Return = carriage.AsciiToString();
+        s_Tab = tab.AsciiToString();
+    }
+
     /** Строка в кавычках с экранированием. */
     static string Str(string value)
     {
-        return "\"" + Escape(value) + "\"";
+        Init();
+        return s_Quote + Escape(value) + s_Quote;
     }
 
     static string Escape(string value)
     {
-        string out = "";
+        Init();
+
+        string result = "";
         int length = value.Length();
 
         for (int i = 0; i < length; i++)
         {
             string ch = value.Substring(i, 1);
 
-            if (ch == "\"") out += "\\\"";
-            else if (ch == "\\") out += "\\\\";
-            else if (ch == "\n") out += "\\n";
-            else if (ch == "\r") out += "\\r";
-            else if (ch == "\t") out += "\\t";
-            else out += ch;
+            if (ch == s_Quote) result += s_Slash + s_Quote;
+            else if (ch == s_Slash) result += s_Slash + s_Slash;
+            else if (ch == s_NewLine) result += s_Slash + "n";
+            else if (ch == s_Return) result += s_Slash + "r";
+            else if (ch == s_Tab) result += s_Slash + "t";
+            else result += ch;
         }
 
-        return out;
+        return result;
     }
 
     static string Bool(bool value)
@@ -53,7 +86,27 @@ class PanelJson
     /** Координаты как [x, y, z]. */
     static string Vec(vector pos)
     {
-        return "[" + Num(pos[0]) + "," + Num(pos[1]) + "," + Num(pos[2]) + "]";
+        return Arr(Num(pos[0]) + "," + Num(pos[1]) + "," + Num(pos[2]));
+    }
+
+    /* ------------------------------------------------- структуры */
+
+    /** Объект: {…}. Фигурные скобки экранировать не нужно. */
+    static string Obj(string body)
+    {
+        return "{" + body + "}";
+    }
+
+    /** Массив: […]. */
+    static string Arr(string body)
+    {
+        return "[" + body + "]";
+    }
+
+    /** Пара «ключ: готовый JSON» — для вложенных объектов и массивов. */
+    static string KRaw(string key, string rawJson)
+    {
+        return Str(key) + ":" + rawJson;
     }
 
     /** Пара «ключ: строка». */
@@ -78,6 +131,18 @@ class PanelJson
     static string KBool(string key, bool value)
     {
         return Str(key) + ":" + Bool(value);
+    }
+
+    /** Пара «ключ: null». */
+    static string KNull(string key)
+    {
+        return Str(key) + ":null";
+    }
+
+    /** Пара «ключ: координаты». */
+    static string KVec(string key, vector pos)
+    {
+        return Str(key) + ":" + Vec(pos);
     }
 }
 

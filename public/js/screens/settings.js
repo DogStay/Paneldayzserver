@@ -513,6 +513,18 @@ Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</
 
     <div class="card">
       <div class="card-head">
+        <span class="card-title-icon">${icon('external')}</span>
+        <div><h2>Доступ снаружи</h2>
+          <div class="card-sub">Проверка по шагам: где обрыв между «панель работает» и «панель открылась
+            с другого компьютера»</div></div>
+        <span class="spacer"></span>
+        <button class="btn btn-sm" id="access-check" type="button">${icon('zap')} Проверить</button>
+      </div>
+      <div id="access-box"><div class="small faint">Нажмите «Проверить» — займёт несколько секунд.</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <span class="card-title-icon">${icon('key')}</span>
         <div><h2>Доступ к панели</h2>
           <div class="card-sub">Мастер-ключи и активные сессии</div></div>
@@ -549,6 +561,7 @@ function bind(server) {
   paneRef.querySelector('#mission-pick').addEventListener('click', () => openMissionPicker());
   bindAnnouncements();
   bindIngame();
+  bindAccess();
   bindAuth();
 
   paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
@@ -640,6 +653,197 @@ function bind(server) {
       await load();
     })
   );
+}
+
+/* ------------------------------------------------------- доступ снаружи */
+
+/**
+ * Проверка доступа: панель сама говорит, на каком шаге обрыв — адрес
+ * прослушивания, брандмауэр, NAT роутера или вход по ключам.
+ */
+function bindAccess() {
+  const box = paneRef.querySelector('#access-box');
+
+  const ICONS = { ok: 'check', bad: 'alert', warn: 'alert', skip: 'info' };
+  const KINDS = { ok: 'ok', bad: 'err', warn: 'warn', skip: 'info' };
+
+  const render = async () => {
+    box.innerHTML = '<div class="small faint">Проверяю адреса, порт и брандмауэр…</div>';
+
+    let data;
+    try {
+      data = await api.access();
+    } catch (err) {
+      box.innerHTML = `<div class="notice err"><span class="ic">${icon('alert')}</span><div>${esc(err.message)}</div></div>`;
+      return;
+    }
+
+    const bad = data.steps.filter((s) => s.state === 'bad').length;
+
+    box.innerHTML = `
+      <div class="notice ${bad ? 'warn' : 'ok'} mb"><span class="ic">${icon(bad ? 'alert' : 'check')}</span>
+        <div>${bad
+          ? `Найдено препятствий: ${bad}. Ниже — что именно и что нажать.`
+          : 'Препятствий не найдено: панель доступна по адресам ниже.'}</div></div>
+
+      <div class="col" style="gap:8px">
+        ${data.steps
+          .map(
+            (step) => `
+              <div class="notice ${KINDS[step.state] || 'info'}">
+                <span class="ic">${icon(ICONS[step.state] || 'info')}</span>
+                <div><b>${esc(step.title)}</b><br>${esc(step.detail)}
+                ${step.action ? `<br><span style="opacity:.85">→ ${esc(step.action)}</span>` : ''}</div>
+              </div>`
+          )
+          .join('')}
+      </div>
+
+      ${data.urls.length
+        ? `<div class="field" style="margin-top:16px">
+            <label>Адреса, по которым панель открывается</label>
+            <div class="row wrap" style="gap:8px">
+              ${data.urls.map((url) => `<span class="badge" style="font-family:var(--mono)">${esc(url)}</span>`).join('')}
+            </div>
+            <div class="hint">Из локальной сети — по адресу машины. Из интернета — по внешнему адресу
+              или домену, и только если порт проброшен (см. шаги выше).</div>
+          </div>`
+        : ''}
+
+      <div class="row wrap" style="margin-top:16px">
+        ${data.loopbackOnly || data.hostUnknown
+          ? `<button class="btn btn-success btn-lg" id="access-expose" type="button">
+              ${icon('external')} Открыть панель наружу</button>`
+          : ''}
+        ${data.firewall.supported && !data.firewall.exists
+          ? `<button class="btn btn-primary" id="access-open-port" type="button">
+              ${icon('shield')} Открыть порт панели (${data.port})</button>`
+          : ''}
+        <button class="btn" id="access-again" type="button">${icon('restart')} Проверить снова</button>
+      </div>
+      ${data.loopbackOnly || data.hostUnknown
+        ? `<div class="hint" style="margin-top:8px">Одной кнопкой: панель начнёт слушать все адреса машины
+            (0.0.0.0), порт откроется в брандмауэре, включится вход по мастер-ключам, и панель покажет
+            адрес и ключ. Перезапуск не нужен.</div>`
+        : ''}`;
+
+    const expose = box.querySelector('#access-expose');
+    if (expose) {
+      expose.addEventListener('click', (e) =>
+        busy(e.currentTarget, async () => {
+          const result = await api.accessExpose('0.0.0.0');
+
+          // Панель переезжает на новый адрес сразу после ответа, поэтому итог
+          // сверяем повторной проверкой, а не тем, что вернулось.
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+
+          let fresh = null;
+          try {
+            fresh = await api.access(true);
+          } catch (_) {
+            /* панель могла на мгновение переоткрыть сокет */
+          }
+
+          if (fresh && fresh.loopbackOnly) {
+            toast('Адрес не сменился — смотрите окно панели, там причина', 'err', 14000);
+          } else {
+            openExposedModal({ ...result, diagnose: fresh || result.diagnose });
+          }
+
+          await render();
+        })
+      );
+    }
+
+    const openPort = box.querySelector('#access-open-port');
+    if (openPort) {
+      openPort.addEventListener('click', (e) =>
+        busy(e.currentTarget, async () => {
+          const result = await api.accessOpenPort();
+
+          if (result.created) toast(`Порт ${data.port} открыт в брандмауэре`, 'ok', 9000);
+          else if (result.existed) toast('Правило уже было', 'info');
+          else if (result.bat) {
+            toast(
+              `Не хватило прав администратора. Панель сохранила ${result.bat} — запустите его ` +
+                'правым щелчком «от имени администратора».',
+              'warn',
+              16000
+            );
+          } else {
+            toast(result.error || 'Не удалось создать правило', 'err', 12000);
+          }
+
+          await render();
+        })
+      );
+    }
+
+    box.querySelector('#access-again').addEventListener('click', (e) => busy(e.currentTarget, render));
+  };
+
+  paneRef.querySelector('#access-check').addEventListener('click', (e) => busy(e.currentTarget, render));
+}
+
+/**
+ * Итог «панель открыта наружу»: адреса, ключи и что делать с роутером.
+ * Показывается один раз сразу после нажатия — чтобы всё нужное было под рукой.
+ */
+function openExposedModal(result) {
+  const d = result.diagnose || {};
+  const urls = d.urls || [];
+  const nat = (d.steps || []).find((s) => s.title.indexOf('NAT') >= 0 && s.state === 'warn');
+
+  modal({
+    title: 'Панель открыта наружу',
+    subtitle: `слушает ${result.host}:${d.port || ''}`,
+    icon: 'external',
+    wide: true,
+    body: `
+      <div class="col" style="gap:14px">
+        <div class="notice ok"><span class="ic">${icon('check')}</span>
+          <div>Адрес прослушивания сменён без перезапуска панели, порт в брандмауэре
+          ${result.firewall && (result.firewall.created || result.firewall.existed) ? 'открыт' : 'НЕ открыт — см. ниже'},
+          вход по мастер-ключам включён.</div></div>
+
+        <div class="field">
+          <label>Адрес для входа с другого компьютера</label>
+          <div class="col" style="gap:6px">
+            ${urls.length
+              ? urls.map((url) => `<span class="badge" style="font-family:var(--mono);font-size:13px">${esc(url)}</span>`).join('')
+              : '<span class="small faint">адреса не определились — нажмите «Проверить»</span>'}
+          </div>
+          <div class="hint">В локальной сети — адрес машины. Из интернета — внешний адрес или домен.</div>
+        </div>
+
+        <div class="field">
+          <label>Мастер-ключи (действуют до перезапуска панели)</label>
+          <div class="col" style="gap:6px">
+            ${(result.keys || [])
+              .map((k) => `<span class="badge" style="font-family:var(--mono);font-size:14px;letter-spacing:.08em">${esc(k.key)}</span>`)
+              .join('')}
+          </div>
+          <div class="hint">Введите любой из них на странице входа. Ключи новые при каждом запуске панели.</div>
+        </div>
+
+        ${nat
+          ? `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+              <div><b>Из интернета пока не откроется.</b> ${esc(nat.detail)}<br>→ ${esc(nat.action)}</div></div>`
+          : ''}
+
+        ${result.firewall && !result.firewall.created && !result.firewall.existed
+          ? `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+              <div>Правило брандмауэра не создано${result.firewall.error ? `: ${esc(result.firewall.error)}` : ''}.
+              Запустите панель от имени администратора и нажмите «Открыть порт панели».</div></div>`
+          : ''}
+
+        <div class="notice info"><span class="ic">${icon('info')}</span>
+          <div>Панель работает по http: для доступа через интернет поставьте её за reverse-proxy
+          с сертификатом (Caddy, nginx) или укажите <span class="inline-code">panel.tls</span> —
+          иначе ключ идёт по сети открытым текстом.</div></div>
+      </div>`,
+    footer: `<span class="spacer"></span><button class="btn btn-primary" data-close>Понятно</button>`
+  });
 }
 
 /* --------------------------------------------------------- доступ к панели */

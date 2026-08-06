@@ -168,6 +168,9 @@ function normalize(cfg) {
   c.panel.port = toInt(c.panel.port, 8787);
   c.panel.logBufferLines = toInt(c.panel.logBufferLines, 2000);
 
+  // Открывать порт самой панели в брандмауэре, когда она слушает сеть.
+  c.panel.autoFirewall = c.panel.autoFirewall !== false;
+
   // Вход по мастер-ключам. "auto" — спрашивать, когда панель слушает не только
   // 127.0.0.1: локальная работа не меняется, выставленная наружу защищена.
   c.panel.auth = c.panel.auth || {};

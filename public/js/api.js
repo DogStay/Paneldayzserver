@@ -45,6 +45,10 @@ export const api = {
   del: (url) => request('DELETE', url),
 
   /* Прикладные вызовы — чтобы экраны не собирали строки URL руками */
+  access: (localOnly) => request('GET', `/access${localOnly ? '?local=1' : ''}`),
+  accessOpenPort: () => request('POST', '/access/firewall', {}),
+  accessExpose: (host) => request('POST', '/access/expose', { host: host || '0.0.0.0' }),
+
   authStatus: () => request('GET', '/auth/status'),
   authKeys: () => request('GET', '/auth/keys'),
   authRotate: () => request('POST', '/auth/rotate', {}),

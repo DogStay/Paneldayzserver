@@ -34,12 +34,15 @@ class PanelSnapshot
             counted++;
         }
 
-        string json = "{\"v\":1,\"ts\":" + bridge.Now();
-        json += "," + PanelJson.KInt("uptimeSec", GetGame().GetTime() / 1000);
-        json += "," + PanelJson.KStr("gameTime", GameTime());
-        json += "," + PanelJson.KInt("playersOnline", counted);
-        json += ",\"dropped\":0";
-        json += ",\"players\":[" + list + "]}";
+        string body = PanelJson.KInt("v", 1);
+        body += "," + PanelJson.KRaw("ts", bridge.Now());
+        body += "," + PanelJson.KInt("uptimeSec", GetGame().GetTime() / 1000);
+        body += "," + PanelJson.KStr("gameTime", GameTime());
+        body += "," + PanelJson.KInt("playersOnline", counted);
+        body += "," + PanelJson.KInt("dropped", 0);
+        body += "," + PanelJson.KRaw("players", PanelJson.Arr(list));
+
+        string json = PanelJson.Obj(body);
 
         bridge.WriteSnapshot(json);
     }
@@ -120,7 +123,7 @@ class PanelSnapshot
         string json = "{" + PanelJson.KStr("id", player.PanelId());
         json += "," + PanelJson.KStr("steam64", player.PanelId());
         json += "," + PanelJson.KStr("name", player.PanelName());
-        json += ",\"pos\":" + PanelJson.Vec(pos);
+        json += "," + PanelJson.KVec("pos", pos);
         json += "," + PanelJson.KNum("dir", orientation[0]);
         json += "," + PanelJson.KNum("health", health);
         json += "," + PanelJson.KNum("blood", blood);
@@ -139,7 +142,7 @@ class PanelSnapshot
         json += "," + PanelJson.KStr("hands", hands);
 
         if (vehicle != "") json += "," + PanelJson.KStr("vehicle", vehicle);
-        else json += ",\"vehicle\":null";
+        else json += "," + PanelJson.KNull("vehicle");
 
         json += "," + PanelJson.KInt("playtimeSec", player.PanelPlaytimeSec());
         json += "," + PanelJson.KInt("ping", -1);

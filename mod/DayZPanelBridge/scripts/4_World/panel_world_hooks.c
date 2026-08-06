@@ -129,7 +129,7 @@ modded class CarScript
 
         string playerJson = "";
         Human driver = CrewMember(DayZPlayerConstants.VEHICLESEAT_DRIVER);
-        if (driver) playerJson = PanelRef.Of(Man.Cast(driver));
+        if (driver) playerJson = PanelRef.Of(PlayerBase.Cast(driver));
 
         string data = "{" + PanelJson.KStr("class", GetType());
         data += "," + PanelJson.KBool("on", on) + "}";

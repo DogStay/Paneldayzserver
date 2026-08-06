@@ -3,6 +3,7 @@
     "host": "127.0.0.1",
     "port": 8787,
     "logBufferLines": 3000,
+    "autoFirewall": true,
     "auth": {
       "enabled": "auto",
       "keyCount": 3,

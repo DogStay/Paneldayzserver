@@ -24,6 +24,8 @@ const scheduler = require('./services/scheduler');
 const announcer = require('./services/announcer');
 const bridge = require('./services/bridge');
 const auth = require('./services/auth');
+const firewall = require('./services/firewall');
+const access = require('./services/access');
 
 const cfg = config.load();
 logger.setMaxLines(cfg.panel.logBufferLines);
@@ -86,6 +88,31 @@ httpServer.listen(port, host, () => {
   logger.info('panel', `Логи:      ${logger.currentFile()}`);
   logger.info('panel', `Отчёты:    ${diagnostics.ROOT}\\diagnostic-report-*.txt`);
 
+  /*
+   * Панель смотрит в сеть — значит нужно, чтобы Windows пускала входящие на её
+   * порт. Про это правило легко забыть, и получается «панель работает, а снаружи
+   * недоступна». Открываем сами; если прав администратора нет — прямо говорим,
+   * что делать.
+   */
+  if (host !== '127.0.0.1' && host !== 'localhost' && cfg.panel.autoFirewall !== false) {
+    firewall
+      .applyPanel()
+      .then((result) => {
+        if (result.created || result.existed) {
+          const addresses = access.localAddresses().map((a) => `${scheme}://${a.address}:${port}`);
+          if (addresses.length) logger.info('panel', `Адреса для входа: ${addresses.join(', ')}`);
+        } else if (result.supported) {
+          logger.warn(
+            'panel',
+            `Порт ${port} не открыт в брандмауэре: ${result.error || 'нет прав'}. ` +
+              'Запустите панель от имени администратора или нажмите «Открыть порт панели» ' +
+              'в настройках — она сохранит .bat для запуска с правами администратора.'
+          );
+        }
+      })
+      .catch((err) => logger.warn('panel', `Проверка брандмауэра не удалась: ${err.message}`));
+  }
+
   const authSettings = auth.settings();
   if (host !== '127.0.0.1' && !authSettings.enabled) {
     logger.warn(
@@ -115,9 +142,63 @@ httpServer.listen(port, host, () => {
   logger.info('panel', '═'.repeat(60));
 });
 
+/**
+ * Переезд на другой адрес прослушивания без перезапуска панели.
+ *
+ * Иначе «открыть панель наружу» превращается в квест: поправь конфиг, закрой
+ * окно, запусти заново, не забудь про брандмауэр. Сокет закрывается и
+ * открывается заново; уже установленные соединения (включая эту страницу)
+ * доживают своё, а при неудаче панель возвращается на прежний адрес.
+ */
+let currentHost = host;
+
+access.setRebinder(
+  (newHost) =>
+    new Promise((resolve) => {
+      if (newHost === currentHost) return resolve({ ok: true, host: newHost, unchanged: true });
+
+      const previous = currentHost;
+
+      // Соединения в keep-alive не дают закрыть слушатель: без этого close()
+      // ждёт их сам по себе минутами. SSE-поток браузер поднимет заново.
+      if (httpServer.closeIdleConnections) httpServer.closeIdleConnections();
+      const force = setTimeout(() => {
+        if (httpServer.closeAllConnections) httpServer.closeAllConnections();
+      }, 2000);
+      force.unref();
+
+      const onError = (err) => {
+        httpServer.removeListener('error', onError);
+        logger.error('panel', `Не удалось занять ${newHost}:${port} (${err.code || err.message}) — возвращаюсь на ${previous}`);
+        httpServer.listen(port, previous, () => resolve({ ok: false, host: previous, error: err.code || err.message }));
+      };
+
+      httpServer.close(() => {
+        clearTimeout(force);
+        httpServer.once('error', onError);
+        httpServer.listen(port, newHost, () => {
+          httpServer.removeListener('error', onError);
+          currentHost = newHost;
+          logger.info('panel', `Панель теперь слушает ${newHost}:${port}`);
+          resolve({ ok: true, host: newHost, previous });
+        });
+      });
+    })
+);
+
 httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     logger.error('panel', `Порт ${port} занят. Измените panel.port в config/config.json`);
+  } else if (err.code === 'EADDRNOTAVAIL') {
+    // Самая частая ошибка при попытке открыть панель наружу: в panel.host
+    // вписывают внешний («белый») адрес, которого у сетевой карты нет.
+    const own = access.localAddresses().map((a) => a.address).join(', ') || 'не найдены';
+    logger.error(
+      'panel',
+      `Адрес ${host} не принадлежит этой машине, слушать его нельзя. Адреса машины: ${own}. ` +
+        'Чтобы панель была доступна из сети, поставьте panel.host = 0.0.0.0 — она примет подключения ' +
+        'на всех адресах, включая внешний.'
+    );
   } else {
     logger.error('panel', `Ошибка HTTP-сервера: ${err.message}`);
   }

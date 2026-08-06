@@ -66,6 +66,74 @@ function desiredRules(cfg = config.active()) {
   return rules;
 }
 
+/**
+ * Правило для порта самой панели.
+ *
+ * Отдельно от серверных портов: игровые порты нужны игрокам, а этот — админу,
+ * который заходит в панель из сети. Про него легко забыть, и тогда получается
+ * ровно то, на что жалуются: panel.host сменили, панель слушает, а снаружи
+ * ничего не открывается, потому что Windows режет входящее подключение.
+ */
+function panelRule(cfg = config.load()) {
+  const port = cfg.panel.port || 8787;
+  return {
+    name: `${RULE_PREFIX}Панель TCP ${port}`,
+    protocol: 'TCP',
+    localport: String(port),
+    comment: 'Веб-панель DayZ Panel'
+  };
+}
+
+/** Создать правило для порта панели. */
+async function applyPanel(opts = {}) {
+  const rule = panelRule();
+
+  if (!isWindows()) {
+    return { supported: false, platform: process.platform, rule, created: false, reason: 'not-windows' };
+  }
+
+  const exists = await ruleExists(rule.name);
+  if (exists && !opts.force) {
+    return { supported: true, rule, created: false, existed: true };
+  }
+  if (exists && opts.force) {
+    await execNetsh(['advfirewall', 'firewall', 'delete', 'rule', `name=${rule.name}`]);
+  }
+
+  let failure = null;
+  for (const dir of ['in', 'out']) {
+    const res = await execNetsh([
+      'advfirewall',
+      'firewall',
+      'add',
+      'rule',
+      `name=${rule.name}`,
+      `dir=${dir}`,
+      'action=allow',
+      `protocol=${rule.protocol}`,
+      `localport=${rule.localport}`,
+      'profile=any',
+      `description=${rule.comment}`
+    ]);
+    if (!res.ok) failure = res.output || `netsh вернул код ${res.code}`;
+  }
+
+  if (failure) {
+    logger.error(SOURCE, `✗ Порт панели ${rule.localport} не открыт: ${failure}`);
+    return { supported: true, rule, created: false, error: failure };
+  }
+
+  logger.info(SOURCE, `✓ Открыт порт панели TCP ${rule.localport} — заходить можно из сети`);
+  return { supported: true, rule, created: true };
+}
+
+/** Есть ли правило для порта панели. */
+async function panelStatus() {
+  const rule = panelRule();
+  if (!isWindows()) return { supported: false, platform: process.platform, rule, exists: null };
+  return { supported: true, rule, exists: await ruleExists(rule.name) };
+}
+
 /** Правило для самого исполняемого файла сервера (полезно при NAT/динамических портах). */
 function programRule(cfg = config.active()) {
   return {
@@ -223,11 +291,20 @@ function generateBat() {
   const rules = desiredRules(cfg);
   const prog = programRule(cfg);
 
+  const panel = panelRule();
+
   const lines = [
     '@echo off',
     'rem Сгенерировано DayZ Panel. Запускать ОТ ИМЕНИ АДМИНИСТРАТОРА.',
     'rem Файл в кодировке CP866 — не добавляйте сюда chcp.',
     'net session >nul 2>&1 || (echo Требуются права администратора & pause & exit /b 1)',
+    '',
+    'rem Порт самой панели — чтобы в неё можно было зайти из сети',
+    ...['in', 'out'].map(
+      (dir) =>
+        `netsh advfirewall firewall add rule name="${panel.name}" dir=${dir} action=allow ` +
+        `protocol=${panel.protocol} localport=${panel.localport} profile=any`
+    ),
     ''
   ];
 
@@ -260,4 +337,14 @@ function generateBat() {
   return { path: target, content: lines.join('\r\n') };
 }
 
-module.exports = { apply, status, removeAll, desiredRules, generateBat, RULE_PREFIX };
+module.exports = {
+  apply,
+  status,
+  removeAll,
+  desiredRules,
+  generateBat,
+  panelRule,
+  applyPanel,
+  panelStatus,
+  RULE_PREFIX
+};

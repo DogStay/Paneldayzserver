@@ -114,7 +114,7 @@ class PanelBridge
     static const string SNAPSHOT_FILE = "$profile:panel/snapshot.json";
 
     static const int PROTOCOL = 1;
-    static const string MOD_VERSION = "1.0.0";
+    static const string MOD_VERSION = "1.0.1";
 
     private static ref PanelBridge s_Instance;
 
@@ -197,7 +197,10 @@ class PanelBridge
         WriteHello(worldName, worldSize, mission, maxPlayers);
         Log("мост запущен, папка обмена: " + DIR);
 
-        Event("server", "", "", vector.Zero, "{\"message\":\"мод-мост запущен\",\"level\":\"info\"}");
+        string startData = PanelJson.Obj(
+            PanelJson.KStr("message", "мод-мост запущен") + "," + PanelJson.KStr("level", "info")
+        );
+        Event("server", "", "", vector.Zero, startData);
     }
 
     private bool EnsureDirs()
@@ -242,18 +245,23 @@ class PanelBridge
 
     private void WriteHello(string worldName, int worldSize, string mission, int maxPlayers)
     {
-        string json = "{";
-        json += "\"v\":1,\"protocol\":" + PROTOCOL.ToString() + ",";
-        json += "\"mod\":\"DayZPanelBridge\",\"modVersion\":" + PanelJson.Str(MOD_VERSION) + ",";
-        json += "\"startedAt\":" + Now() + ",";
-        json += "\"world\":" + PanelJson.Str(worldName) + ",";
-        json += "\"worldSize\":" + worldSize.ToString() + ",";
-        json += "\"mission\":" + PanelJson.Str(mission) + ",";
-        json += "\"maxPlayers\":" + maxPlayers.ToString() + ",";
-        json += "\"features\":[\"events\",\"snapshot\",\"commands\",\"inventory\"]";
-        json += "}";
+        string features = PanelJson.Arr(
+            PanelJson.Str("events") + "," + PanelJson.Str("snapshot") + "," +
+            PanelJson.Str("commands") + "," + PanelJson.Str("inventory")
+        );
 
-        WriteAtomic(HELLO_FILE, json);
+        string body = PanelJson.KInt("v", 1);
+        body += "," + PanelJson.KInt("protocol", PROTOCOL);
+        body += "," + PanelJson.KStr("mod", "DayZPanelBridge");
+        body += "," + PanelJson.KStr("modVersion", MOD_VERSION);
+        body += "," + PanelJson.KRaw("startedAt", Now());
+        body += "," + PanelJson.KStr("world", worldName);
+        body += "," + PanelJson.KInt("worldSize", worldSize);
+        body += "," + PanelJson.KStr("mission", mission);
+        body += "," + PanelJson.KInt("maxPlayers", maxPlayers);
+        body += "," + PanelJson.KRaw("features", features);
+
+        WriteAtomic(HELLO_FILE, PanelJson.Obj(body));
     }
 
     /* --------------------------------------------------------------- время */
@@ -325,14 +333,13 @@ class PanelBridge
         if (!EventEnabled(type)) return;
         if (!Budget()) return;
 
-        string json = "{\"ts\":" + Now() + ",\"type\":" + PanelJson.Str(type);
-        if (playerJson != "") json += ",\"player\":" + playerJson;
-        if (targetJson != "") json += ",\"target\":" + targetJson;
-        if (pos != vector.Zero) json += ",\"pos\":" + PanelJson.Vec(pos);
-        if (dataJson != "") json += ",\"data\":" + dataJson;
-        json += "}";
+        string body = PanelJson.KRaw("ts", Now()) + "," + PanelJson.KStr("type", type);
+        if (playerJson != "") body += "," + PanelJson.KRaw("player", playerJson);
+        if (targetJson != "") body += "," + PanelJson.KRaw("target", targetJson);
+        if (pos != vector.Zero) body += "," + PanelJson.KVec("pos", pos);
+        if (dataJson != "") body += "," + PanelJson.KRaw("data", dataJson);
 
-        m_Buffer.Insert(json);
+        m_Buffer.Insert(PanelJson.Obj(body));
     }
 
     /**
@@ -370,13 +377,19 @@ class PanelBridge
     {
         if (!IsReady() || m_Buffer.Count() == 0) return;
 
-        string json = "{\"v\":1,\"ts\":" + Now() + ",\"dropped\":" + m_Dropped.ToString() + ",\"events\":[";
+        string events = "";
         for (int i = 0; i < m_Buffer.Count(); i++)
         {
-            if (i > 0) json += ",";
-            json += m_Buffer.Get(i);
+            if (i > 0) events += ",";
+            events += m_Buffer.Get(i);
         }
-        json += "]}";
+
+        string body = PanelJson.KInt("v", 1);
+        body += "," + PanelJson.KRaw("ts", Now());
+        body += "," + PanelJson.KInt("dropped", m_Dropped);
+        body += "," + PanelJson.KRaw("events", PanelJson.Arr(events));
+
+        string json = PanelJson.Obj(body);
 
         m_Seq++;
         string name = OUT_DIR + "/ev_" + Now() + "_" + m_Seq.ToString() + ".json";
@@ -409,8 +422,8 @@ class PanelBridge
         if (!IsReady()) return;
 
         string name;
-        FileAttr attr;
-        FindFileHandle handle = FindFile(IN_DIR + "/*.json", name, attr, 0);
+        int attr;
+        FindFileHandle handle = FindFile(IN_DIR + "/*.json", name, attr, FindFileFlags.DIRECTORIES);
         if (!handle) return;
 
         ref array<string> files = new array<string>;
@@ -446,14 +459,18 @@ class PanelBridge
         if (m_Handler) ok = m_Handler.Execute(cmd, resultJson, error);
         else error = "обработчик команд не подключён";
 
-        string data = "{\"id\":" + PanelJson.Str(cmd.id);
-        data += ",\"action\":" + PanelJson.Str(cmd.action);
-        data += ",\"ok\":" + PanelJson.Bool(ok);
-        if (!ok) data += ",\"error\":" + PanelJson.Str(error);
-        data += ",\"result\":" + resultJson + "}";
+        string body = PanelJson.KStr("id", cmd.id);
+        body += "," + PanelJson.KStr("action", cmd.action);
+        body += "," + PanelJson.KBool("ok", ok);
+        if (!ok) body += "," + PanelJson.KStr("error", error);
+        body += "," + PanelJson.KRaw("result", resultJson);
+
+        string event = PanelJson.KRaw("ts", Now());
+        event += "," + PanelJson.KStr("type", "command_result");
+        event += "," + PanelJson.KRaw("data", PanelJson.Obj(body));
 
         // Ответ на команду не подчиняется ограничителю частоты: панель его ждёт.
-        m_Buffer.Insert("{\"ts\":" + Now() + ",\"type\":\"command_result\",\"data\":" + data + "}");
+        m_Buffer.Insert(PanelJson.Obj(event));
         Flush();
     }
 
@@ -498,8 +515,8 @@ class PanelBridge
         if (!IsReady()) return;
 
         string name;
-        FileAttr attr;
-        FindFileHandle handle = FindFile(OUT_DIR + "/ev_*.json", name, attr, 0);
+        int attr;
+        FindFileHandle handle = FindFile(OUT_DIR + "/ev_*.json", name, attr, FindFileFlags.DIRECTORIES);
         if (!handle) return;
 
         ref array<string> files = new array<string>;

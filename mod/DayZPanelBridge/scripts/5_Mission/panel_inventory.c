@@ -20,15 +20,15 @@ class PanelInventory
         string json = "{" + PanelJson.KStr("id", player.PanelId());
 
         EntityAI hands = player.GetItemInHands();
-        if (hands) json += ",\"hands\":" + ItemJson(hands, 0, maxDepth);
-        else json += ",\"hands\":null";
+        if (hands) json += "," + PanelJson.KRaw("hands", ItemJson(hands, 0, maxDepth));
+        else json += "," + PanelJson.KNull("hands");
 
-        json += ",\"clothing\":[" + Attachments(player, 0, maxDepth) + "]";
+        json += "," + PanelJson.KRaw("clothing", PanelJson.Arr(Attachments(player, 0, maxDepth)));
         // Своего грузового отсека у игрока нет: всё лежит в надетых вещах,
         // поэтому cargo здесь всегда пуст — панель это учитывает.
-        json += ",\"cargo\":[]}";
+        json += "," + PanelJson.KRaw("cargo", PanelJson.Arr(""));
 
-        return json;
+        return PanelJson.Obj(json);
     }
 
     /** Один предмет вместе со вложенными. */
@@ -53,8 +53,8 @@ class PanelInventory
             }
         }
 
-        json += ",\"children\":[" + children + "]}";
-        return json;
+        json += "," + PanelJson.KRaw("children", PanelJson.Arr(children));
+        return PanelJson.Obj(json);
     }
 
     /** Вложения (надетое, прикрученное к оружию). */
@@ -63,7 +63,7 @@ class PanelInventory
         GameInventory inventory = entity.GetInventory();
         if (!inventory) return "";
 
-        string out = "";
+        string result = "";
         int count = inventory.AttachmentCount();
 
         for (int i = 0; i < count; i++)
@@ -71,11 +71,11 @@ class PanelInventory
             EntityAI attachment = inventory.GetAttachmentFromIndex(i);
             if (!attachment) continue;
 
-            if (out != "") out += ",";
-            out += ItemJson(attachment, depth, maxDepth);
+            if (result != "") result += ",";
+            result += ItemJson(attachment, depth, maxDepth);
         }
 
-        return out;
+        return result;
     }
 
     /** Содержимое грузового отсека (карманы, сумка, ящик). */
@@ -87,7 +87,7 @@ class PanelInventory
         CargoBase cargo = inventory.GetCargo();
         if (!cargo) return "";
 
-        string out = "";
+        string result = "";
         int count = cargo.GetItemCount();
 
         for (int i = 0; i < count; i++)
@@ -95,10 +95,10 @@ class PanelInventory
             EntityAI item = cargo.GetItem(i);
             if (!item) continue;
 
-            if (out != "") out += ",";
-            out += ItemJson(item, depth, maxDepth);
+            if (result != "") result += ",";
+            result += ItemJson(item, depth, maxDepth);
         }
 
-        return out;
+        return result;
     }
 }

@@ -33,6 +33,7 @@ const ingame = require('../services/ingame');
 const battleye = require('../services/battleye');
 const bridge = require('../services/bridge');
 const auth = require('../services/auth');
+const access = require('../services/access');
 const eventlog = require('../services/eventlog');
 
 const router = express.Router();
@@ -61,6 +62,41 @@ function serverIdOf(req) {
  */
 
 router.get('/auth/status', (req, res) => res.json(auth.status(req)));
+
+/* --------------------------------------------------- доступ снаружи */
+
+/** Проверка «почему панель не открывается из сети», по шагам. */
+router.get(
+  '/access',
+  wrap(async (req, res) => res.json(await access.diagnose({ skipPublic: req.query.local === '1' })))
+);
+
+/** Открыть порт панели в брандмауэре Windows. */
+router.post('/access/firewall', wrap(async (req, res) => res.json(await access.openPort())));
+
+/**
+ * Открыть панель наружу одним действием: адрес прослушивания, брандмауэр,
+ * ключи. Без перезапуска панели.
+ */
+router.post(
+  '/access/expose',
+  wrap(async (req, res) => {
+    const result = await access.expose({ host: (req.body || {}).host });
+
+    // Ответ уходит первым и с Connection: close — иначе слушатель нельзя
+    // закрыть: он будет ждать, пока освободится это самое соединение.
+    res.setHeader('Connection', 'close');
+    res.json(result);
+
+    if (result.rebindPending) {
+      res.on('finish', () => {
+        access.rebind(result.host, result.previousHost).catch((err) =>
+          logger.error('panel', `Переезд панели не удался: ${err.message}`)
+        );
+      });
+    }
+  })
+);
 
 router.post('/auth/login', (req, res) => {
   const result = auth.login(req, (req.body || {}).key);
