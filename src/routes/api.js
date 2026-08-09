@@ -724,6 +724,28 @@ router.post(
   })
 );
 
+/**
+ * Загрузка файла картинки прямо с компьютера админа.
+ *
+ * Тело — сами байты картинки (express.raw), без multipart: браузер отправляет
+ * File как ArrayBuffer, разбирать границы формы незачем. Так подложка ставится
+ * даже когда картинка лежит только на диске и нигде не опубликована.
+ */
+router.post(
+  '/map/image/upload',
+  express.raw({ type: ['image/*', 'application/octet-stream'], limit: '64mb' }),
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+
+    if (!body.length) throw new Error('Файл не получен: тело запроса пустое');
+
+    const info = maptiles.saveImage(worldOf(serverId), body, req.headers['content-type'] || '');
+    adminlog.note(serverId, 'карта', `загружена картинка карты (${Math.round(info.bytes / 1024)} КБ)`);
+    res.json(info);
+  })
+);
+
 router.delete('/map/image', (req, res) => res.json(maptiles.clearImage(worldOf(serverIdOf(req)))));
 
 /** Скачать один тайл прямо сейчас и показать, что ответил источник. */

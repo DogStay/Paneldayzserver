@@ -27,6 +27,7 @@ const https = require('https');
 const http = require('http');
 
 const config = require('./../config');
+const { imageSize } = require('../util/imagesize');
 const logger = require('./../logger');
 
 const SOURCE = 'map';
@@ -432,22 +433,58 @@ function imageInfo(world) {
 
   try {
     const stat = fs.statSync(file);
-    return { exists: true, file, bytes: stat.size, changedAt: Math.round(stat.mtimeMs) };
+    const head = Buffer.alloc(Math.min(65536, stat.size));
+
+    const handle = fs.openSync(file, 'r');
+    fs.readSync(handle, head, 0, head.length, 0);
+    fs.closeSync(handle);
+
+    const measured = imageSize(head) || {};
+    return {
+      exists: true,
+      file,
+      bytes: stat.size,
+      width: measured.width || 0,
+      height: measured.height || 0,
+      // Мир DayZ квадратный: неквадратная картинка растянется и метки поедут.
+      square: Boolean(measured.width && measured.width === measured.height),
+      changedAt: Math.round(stat.mtimeMs)
+    };
   } catch (_) {
     return { exists: false };
   }
 }
 
-/** Скачать картинку карты по ссылке. */
-async function setImage(world, url) {
-  const address = String(url || '').trim();
-  if (!/^https?:\/\//i.test(address)) throw new Error('нужна ссылка, начинающаяся с http:// или https://');
+/**
+ * Ссылки, которые ведут не на файл, а на страницу просмотра.
+ *
+ * Самый частый случай — Google Drive: по ссылке вида /file/d/<id>/view отдаётся
+ * HTML, и панель честно отвечала «по ссылке не картинка». Приводим такие ссылки
+ * к прямой отдаче файла.
+ */
+function directUrl(url) {
+  const drive = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/i) || url.match(/drive\.google\.com\/open\?id=([^&#]+)/i);
+  if (drive) return `https://drive.usercontent.google.com/download?id=${drive[1]}&export=download`;
 
-  const result = await enqueue(() => fetchUrl(address));
-  if (!looksLikeImage(result.body)) throw new Error('по ссылке не картинка (нужен PNG или JPEG)');
-  if (result.body.length > MAX_IMAGE_BYTES) throw new Error('картинка больше 64 МБ — возьмите поменьше');
+  // Dropbox: ?dl=0 отдаёт страницу, ?raw=1 — сам файл.
+  if (/dropbox\.com\//i.test(url)) return url.replace(/([?&])dl=0/i, '$1raw=1');
 
-  const extension = /png/i.test(result.type) ? 'png' : /webp/i.test(result.type) ? 'webp' : 'jpg';
+  return url;
+}
+
+/** Сохранить готовые байты картинки как подложку карты. */
+function saveImage(world, body, contentType) {
+  if (!looksLikeImage(body)) {
+    throw new Error(
+      'это не картинка (нужен PNG, JPEG или WebP). Если ссылка ведёт на страницу просмотра, ' +
+        'возьмите прямую ссылку на файл или загрузите файл с компьютера'
+    );
+  }
+  if (body.length > MAX_IMAGE_BYTES) throw new Error('картинка больше 64 МБ — возьмите поменьше');
+
+  const measured = imageSize(body) || {};
+  const type = measured.type || contentType || '';
+  const extension = /png/i.test(type) ? 'png' : /webp/i.test(type) ? 'webp' : 'jpg';
   const file = path.join(IMAGE_ROOT, `${worldOf(world) || 'unknown'}.${extension}`);
 
   // Старый файл мог быть с другим расширением — убираем, иначе останутся два.
@@ -455,10 +492,19 @@ async function setImage(world, url) {
   if (previous && previous !== file) fs.rmSync(previous, { force: true });
 
   fs.mkdirSync(IMAGE_ROOT, { recursive: true });
-  fs.writeFileSync(file, result.body);
+  fs.writeFileSync(file, body);
 
-  logger.info(SOURCE, `Картинка карты сохранена: ${file} (${Math.round(result.body.length / 1024)} КБ)`);
+  logger.info(SOURCE, `Картинка карты сохранена: ${file} (${Math.round(body.length / 1024)} КБ)`);
   return imageInfo(world);
+}
+
+/** Скачать картинку карты по ссылке. */
+async function setImage(world, url) {
+  const address = String(url || '').trim();
+  if (!/^https?:\/\//i.test(address)) throw new Error('нужна ссылка, начинающаяся с http:// или https://');
+
+  const result = await enqueue(() => fetchUrl(directUrl(address)));
+  return saveImage(world, result.body, result.type);
 }
 
 function clearImage(world) {
@@ -590,6 +636,8 @@ module.exports = {
   imageFile,
   imageInfo,
   setImage,
+  saveImage,
+  directUrl,
   clearImage,
   cacheStats,
   clearCache

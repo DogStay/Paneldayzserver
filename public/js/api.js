@@ -114,6 +114,26 @@ export const api = {
   clearMapTiles: (all) => request('DELETE', `/map/tiles${all ? '?all=1' : ''}`),
   testMapTiles: (layer) => request('POST', '/map/test', { layer }),
   setMapImage: (url) => request('POST', '/map/image', { url }),
+
+  /** Файл картинки отправляется байтами: multipart тут ни к чему. */
+  uploadMapImage: async (file) => {
+    const res = await fetch('/api/map/image/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file
+    });
+
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (_) {
+      data = { error: text.slice(0, 300) };
+    }
+
+    if (!res.ok) throw new Error((data && data.error) || `Ошибка ${res.status}`);
+    return data;
+  },
   clearMapImage: () => request('DELETE', '/map/image'),
 
   missions: () => request('GET', '/missions'),

@@ -922,16 +922,29 @@ function bindTiles() {
 
       <div class="field" style="margin-top:12px">
         <label>Своя картинка карты <span class="badge">надёжнее тайлов</span></label>
-        <div class="row" style="gap:8px">
-          <input type="text" id="tiles-image-url" placeholder="https://…/raman.jpg" style="flex:1;min-width:0"
-                 value="">
-          <button class="btn" id="tiles-image-load" type="button">Загрузить</button>
+
+        <div class="row wrap" style="gap:8px">
+          <input type="file" id="tiles-image-file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0">
+          <button class="btn btn-primary" id="tiles-image-upload" type="button">${icon('folder')} Загрузить файл</button>
+        </div>
+
+        <div class="row" style="gap:8px;margin-top:8px">
+          <input type="text" id="tiles-image-url" placeholder="или ссылка: https://…/raman.jpg или Google Диск"
+                 style="flex:1;min-width:0" value="">
+          <button class="btn" id="tiles-image-load" type="button">По ссылке</button>
           ${info.image && info.image.exists ? '<button class="btn" id="tiles-image-clear" type="button">Убрать</button>' : ''}
         </div>
+
         <div class="hint">${
           info.image && info.image.exists
-            ? `Загружена картинка ${Math.round(info.image.bytes / 1024)} КБ — она рисуется под метками, тайлы не нужны.`
-            : 'Одна квадратная картинка карты целиком. Работает всегда: адреса версий у чужих тайл-серверов меняются, а файл на диске — нет.'
+            ? `Загружена картинка ${info.image.width}×${info.image.height}, ${Math.round(info.image.bytes / 1024)} КБ —
+               она рисуется под метками, тайлы не нужны.` +
+              (info.image.square
+                ? ''
+                : ' <b>Картинка не квадратная</b>, а мир в DayZ квадратный: она растянется, и метки игроков' +
+                  ' встанут неточно. Обрежьте её по краям карты.')
+            : 'Проще всего — выбрать файл на компьютере. Ссылка тоже подойдёт: Google Диск и Dropbox панель' +
+              ' приводит к прямой ссылке сама. Картинка должна быть квадратной — это карта целиком, без рамок.'
         }</div>
       </div>
 
@@ -947,6 +960,18 @@ function bindTiles() {
           panel: { map: { tiles: { enabled: value !== 'off', ...(value === 'off' ? {} : { layer: value }) } } }
         });
         toast('Подложка обновлена — откройте вкладку «Карта»', 'ok');
+        await render();
+      })
+    );
+
+    box.querySelector('#tiles-image-upload').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const input = box.querySelector('#tiles-image-file');
+        const file = input.files && input.files[0];
+        if (!file) return void toast('Сначала выберите файл', 'warn');
+
+        const result = await api.uploadMapImage(file);
+        toast(`Картинка карты загружена: ${result.width}×${result.height}, ${Math.round(result.bytes / 1024)} КБ`, 'ok', 9000);
         await render();
       })
     );
