@@ -42,6 +42,12 @@
       "name": "tfl_bot",
       "charset": "utf8mb4"
     },
+    "discord": {
+      "botToken": "",
+      "guildId": "",
+      "verifiedRoleId": "",
+      "logChannelId": ""
+    },
     "tls": {
       "enabled": false,
       "certFile": "",

@@ -162,6 +162,11 @@
       <a href="#" id="to-login" style="color:#8fc3ff">Войти в существующий аккаунт</a>
     </span>
     <div style="margin-top:8px">Сессия держится <span id="hours">12</span> ч.</div>
+    <!-- Мастер настройки открывается только на самой машине, поэтому ссылку
+         показываем лишь там, где она сработает. -->
+    <div style="margin-top:8px" id="setup-link-wrap" hidden>
+      <a href="/setup.html" style="color:#8fc3ff">Настройка панели</a> — всё в одном месте
+    </div>
   </div>
 </div>
 
@@ -218,6 +223,10 @@
       }
     } catch (_) {
       /* панель ответит на попытке входа */
+    }
+
+    if (['127.0.0.1', 'localhost', '::1'].includes(location.hostname)) {
+      document.getElementById('setup-link-wrap').hidden = false;
     }
 
     // Ошибку из перехода Discord показываем сразу.

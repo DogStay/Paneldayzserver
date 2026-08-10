@@ -42,6 +42,7 @@ const discord = require('../services/discord');
 const permissions = require('../services/permissions');
 const db = require('../db');
 const roster = require('../services/roster');
+const setup = require('../services/setup');
 
 const router = express.Router();
 
@@ -859,6 +860,27 @@ router.get('/roster', (req, res) => res.json(roster.status(serverIdOf(req))));
 router.get('/roster/check', (req, res) =>
   res.json({ steamId: String(req.query.steamId || ''), targets: roster.check(serverIdOf(req), req.query.steamId) })
 );
+
+/* --------------------------------------------------- мастер настройки (localhost) */
+
+/*
+ * Мастер настройки живёт отдельно от прав панели: он открывается только с самой
+ * машины и работает даже когда аккаунтов ещё нет — иначе первую настройку негде
+ * было бы сделать. Поэтому проверка тут своя, по адресу соединения.
+ */
+function localOnly(req, res, next) {
+  if (!setup.isLocalRequest(req)) return setup.refuse(res);
+  return next();
+}
+
+/** Все поля, значения (без секретов) и готовность по шагам. */
+router.get('/setup', localOnly, wrap(async (req, res) => res.json(setup.state())));
+
+/** Сохранить изменения. Пустое поле секрета означает «не менять». */
+router.post('/setup', localOnly, wrap(async (req, res) => res.json(setup.apply(req.body || {}))));
+
+/** Проверить связь с MySQL по кнопке. */
+router.get('/setup/database', localOnly, wrap(async (req, res) => res.json(await setup.testDatabase())));
 
 /* ------------------------------------------------------------ база данных */
 

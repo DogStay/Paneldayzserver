@@ -360,7 +360,13 @@ const PUBLIC_PATHS = new Set([
   '/api/auth/status',
   '/api/auth/discord/start',
   '/api/auth/discord/callback',
-  '/favicon.ico'
+  '/favicon.ico',
+  // Мастер настройки: без входа, но только с самой машины — доступ проверяет
+  // services/setup.js (pageGuard и localOnly у маршрутов).
+  '/setup.html',
+  '/js/setup.js',
+  '/api/setup',
+  '/api/setup/database'
 ]);
 
 function middleware() {

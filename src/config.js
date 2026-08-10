@@ -230,6 +230,17 @@ function normalize(cfg) {
   c.panel.database.name = String(c.panel.database.name || 'tfl_bot').trim();
   c.panel.database.charset = String(c.panel.database.charset || 'utf8mb4').trim();
 
+  /*
+   * Настройки Discord-бота. Панель их только хранит и отдаёт боту по API-токену:
+   * так у владельца одно место настройки вместо .env рядом с ботом, а токен не
+   * лежит в двух копиях, которые расходятся.
+   */
+  c.panel.discord = c.panel.discord || {};
+  c.panel.discord.botToken = String(c.panel.discord.botToken || '').trim();
+  c.panel.discord.guildId = String(c.panel.discord.guildId || '').trim();
+  c.panel.discord.verifiedRoleId = String(c.panel.discord.verifiedRoleId || '').trim();
+  c.panel.discord.logChannelId = String(c.panel.discord.logChannelId || '').trim();
+
   c.panel.tls = c.panel.tls || {};
   c.panel.tls.enabled = Boolean(c.panel.tls.enabled);
   c.panel.tls.certFile = cleanPath(c.panel.tls.certFile);
@@ -578,6 +589,12 @@ function publicView() {
   if (copy.panel.auth && copy.panel.auth.discord) {
     copy.panel.auth.discord.clientSecret = '';
     copy.panel.auth.discord.hasSecret = Boolean(cfg.panel.auth.discord.clientSecret);
+  }
+
+  // Токен бота Discord — пароль от бота: с ним можно говорить от его имени.
+  if (copy.panel.discord) {
+    copy.panel.discord.botToken = '';
+    copy.panel.discord.hasBotToken = Boolean(cfg.panel.discord.botToken);
   }
 
   // Значения API-токенов наружу не отдаём даже вошедшему администратору:

@@ -25,6 +25,7 @@ const announcer = require('./services/announcer');
 const bridge = require('./services/bridge');
 const adminlog = require('./services/adminlog');
 const roster = require('./services/roster');
+const setup = require('./services/setup');
 const auth = require('./services/auth');
 const firewall = require('./services/firewall');
 const access = require('./services/access');
@@ -41,6 +42,9 @@ app.use(express.json({ limit: '4mb' }));
 // только страница входа и сама проверка ключа.
 auth.start();
 app.use(auth.middleware());
+
+// Мастер настройки открывается без входа, но только с этой машины.
+app.use(setup.pageGuard());
 
 app.use('/api', api);
 
@@ -88,6 +92,8 @@ httpServer.listen(port, host, () => {
   logger.info('panel', `Платформа: ${process.platform}, Node ${process.version}`);
   logger.info('panel', `Конфиг:    ${config.CONFIG_FILE}`);
   logger.info('panel', `Логи:      ${logger.currentFile()}`);
+  // Мастер настройки — первое, что нужно владельцу, поэтому адрес виден сразу.
+  logger.info('panel', `Настройка: ${scheme}://127.0.0.1:${port}/setup.html (только на этой машине)`);
   logger.info('panel', `Отчёты:    ${diagnostics.ROOT}\\diagnostic-report-*.txt`);
 
   /*
