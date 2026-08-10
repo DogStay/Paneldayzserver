@@ -424,6 +424,7 @@ Paneldayzserver/
 ├── tools/pack-pbo.js           упаковщик PBO (без DayZ Tools)
 ├── docs/bridge-mod-prompt.md   протокол обмена панели и мода
 ├── docs/integration-prompt.md  задание для интеграции сайта и Discord-бота
+├── docs/panel-prompt.md        задание для работы над самой панелью
 ├── logs/                       panel-*.log, crash-*.txt и events/ (журнал действий)
 ├── generated/                  open-firewall.bat (по кнопке)
 ├── install.bat                 установка зависимостей (CP866, без chcp)
