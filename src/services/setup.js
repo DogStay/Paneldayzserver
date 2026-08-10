@@ -143,7 +143,15 @@ const STEPS = [
         hint: 'Bot → Reset Token. Нужен боту, панель его только хранит и отдаёт боту по API-токену' },
       { path: 'panel.discord.guildId', label: 'ID сервера Discord', type: 'text' },
       { path: 'panel.discord.verifiedRoleId', label: 'ID роли «проверен»', type: 'text' },
-      { path: 'panel.discord.logChannelId', label: 'ID канала для журнала', type: 'text' }
+      { path: 'panel.discord.logChannelId', label: 'ID канала для журнала', type: 'text' },
+      { path: 'panel.discord.statusChannelId', label: 'ID канала со статусом сервера', type: 'text',
+        hint: 'Бот держит там одно сообщение и обновляет его — онлайн, карта, перезапуск' },
+      { path: 'panel.discord.ticketChannelId', label: 'ID канала тикетов', type: 'text',
+        hint: 'В нём бот держит кнопку «Создать обращение»' },
+      { path: 'panel.discord.staffRoleId', label: 'ID роли поддержки', type: 'text',
+        hint: 'Кого звать в тикет' },
+      { path: 'panel.discord.adminRoleId', label: 'ID роли админов', type: 'text',
+        hint: 'Кому доступны команды управления сервером из Discord' }
     ]
   },
   {

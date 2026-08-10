@@ -240,6 +240,10 @@ function normalize(cfg) {
   c.panel.discord.guildId = String(c.panel.discord.guildId || '').trim();
   c.panel.discord.verifiedRoleId = String(c.panel.discord.verifiedRoleId || '').trim();
   c.panel.discord.logChannelId = String(c.panel.discord.logChannelId || '').trim();
+  c.panel.discord.statusChannelId = String(c.panel.discord.statusChannelId || '').trim();
+  c.panel.discord.ticketChannelId = String(c.panel.discord.ticketChannelId || '').trim();
+  c.panel.discord.staffRoleId = String(c.panel.discord.staffRoleId || '').trim();
+  c.panel.discord.adminRoleId = String(c.panel.discord.adminRoleId || '').trim();
 
   c.panel.tls = c.panel.tls || {};
   c.panel.tls.enabled = Boolean(c.panel.tls.enabled);

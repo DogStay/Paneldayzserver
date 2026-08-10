@@ -101,6 +101,7 @@ const RULES = [
   ['POST', '/verify/unlink', 'files.write'],
 
   // Прописка игрока меняет файлы сервера — это право файлов, не просмотра.
+  ['GET', '/roster/groups', 'files.read'],
   ['GET', '/roster', 'files.read'],
   ['POST', '/roster/add', 'files.write'],
   ['GET', '/db', 'settings.view'],

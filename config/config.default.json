@@ -46,7 +46,11 @@
       "botToken": "",
       "guildId": "",
       "verifiedRoleId": "",
-      "logChannelId": ""
+      "logChannelId": "",
+      "statusChannelId": "",
+      "ticketChannelId": "",
+      "staffRoleId": "",
+      "adminRoleId": ""
     },
     "tls": {
       "enabled": false,

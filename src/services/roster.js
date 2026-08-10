@@ -360,6 +360,41 @@ function status(serverId) {
   };
 }
 
+/**
+ * Фракции из целей формата group-spawner.
+ *
+ * Боту нужен состав, чтобы показывать «кто в какой фракции» и не пускать
+ * человека в две сразу. Читаем прямо из файла сервера: он и есть истина, а не
+ * копия в базе бота, которая расходится.
+ */
+function groups(serverId) {
+  const list = [];
+
+  for (const target of targets(serverId).filter((t) => t.format === 'group-spawner')) {
+    const file = resolveFile(serverId, target);
+    let data = null;
+
+    try {
+      data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (err) {
+      list.push({ target: target.id, title: target.title, error: `файл не прочитан: ${err.message}`, groups: [] });
+      continue;
+    }
+
+    const parsed = (Array.isArray(data.Groups) ? data.Groups : []).map((group) => ({
+      name: String(group.name || ''),
+      members: (Array.isArray(group.members) ? group.members : []).map((m) => ({
+        steamId: String(m.steam64 || m.steamId || ''),
+        name: String(m.name || '')
+      }))
+    }));
+
+    list.push({ target: target.id, title: target.title, error: '', groups: parsed });
+  }
+
+  return list;
+}
+
 /** Прописан ли уже игрок — по всем настроенным целям. */
 function check(serverId, steamId) {
   const id = String(steamId || '').trim();
@@ -398,4 +433,4 @@ function stop() {
   saveQueue();
 }
 
-module.exports = { start, stop, enqueue, status, check, targets, tick, contains, withPlayer };
+module.exports = { start, stop, enqueue, status, check, targets, groups, tick, contains, withPlayer };

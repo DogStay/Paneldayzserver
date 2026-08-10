@@ -976,6 +976,10 @@ router.get('/bot/config', (req, res) => {
     guildId: d.guildId || '',
     verifiedRoleId: d.verifiedRoleId || '',
     logChannelId: d.logChannelId || '',
+    statusChannelId: d.statusChannelId || '',
+    ticketChannelId: d.ticketChannelId || '',
+    staffRoleId: d.staffRoleId || '',
+    adminRoleId: d.adminRoleId || '',
     serverId: active ? active.id : '',
     serverName: active ? active.name : '',
     verifyTtlSeconds: Math.round(identity.TTL_MS / 1000),
@@ -1003,6 +1007,9 @@ router.post('/setup', localOnly, wrap(async (req, res) => res.json(setup.apply(r
 
 /** Проверить связь с MySQL по кнопке. */
 router.get('/setup/database', localOnly, wrap(async (req, res) => res.json(await setup.testDatabase())));
+
+/** Фракции и их состав — прямо из GroupSpawner.json сервера. */
+router.get('/roster/groups', (req, res) => res.json({ files: roster.groups(serverIdOf(req)) }));
 
 /* ------------------------------------------------------------ база данных */
 
