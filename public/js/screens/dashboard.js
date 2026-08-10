@@ -9,7 +9,7 @@
 import { api } from '../api.js';
 import {
   state, on, activeServer, activeStatus, restartOf,
-  refreshStatus, refreshServers, navigate, awaitJob
+  refreshStatus, refreshServers, navigate, awaitJob, can
 } from '../store.js';
 import {
   $, $$, esc, icon, toast, busy,
@@ -24,21 +24,26 @@ import { initCFToolsTab } from './cftools.js';
 import { initMapTab } from './map.js';
 import { initEventLogTab } from './eventlog.js';
 
+/*
+ * У каждой вкладки указано право, без которого её незачем показывать: человеку с
+ * доступом «только логи» не нужны ни моды, ни порты, а его браузер иначе просто
+ * собирал бы отказы 403.
+ */
 const TABS = [
-  { id: 'overview', label: 'Обзор', icon: 'activity' },
+  { id: 'overview', label: 'Обзор', icon: 'activity', permission: 'panel.view' },
   // Карта и журнал действий работают через серверный мод-мост; если его нет,
   // вкладки сами объясняют, как его подключить.
-  { id: 'map', label: 'Карта', icon: 'map' },
-  { id: 'events', label: 'Логи', icon: 'file' },
-  { id: 'mods', label: 'Модификации', icon: 'package' },
-  { id: 'settings', label: 'Настройки сервера', icon: 'settings' },
-  { id: 'cfg', label: 'Конфигурация', icon: 'file' },
-  { id: 'bat', label: 'Файл запуска', icon: 'terminal' },
-  { id: 'firewall', label: 'Порты', icon: 'shield' },
+  { id: 'map', label: 'Карта', icon: 'map', permission: 'map.view' },
+  { id: 'events', label: 'Логи', icon: 'file', permission: 'events.view' },
+  { id: 'mods', label: 'Модификации', icon: 'package', permission: 'mods.view' },
+  { id: 'settings', label: 'Настройки сервера', icon: 'settings', permission: 'settings.view' },
+  { id: 'cfg', label: 'Конфигурация', icon: 'file', permission: 'settings.view' },
+  { id: 'bat', label: 'Файл запуска', icon: 'terminal', permission: 'settings.manage' },
+  { id: 'firewall', label: 'Порты', icon: 'shield', permission: 'settings.manage' },
   // Вкладка нужна только тем, кто пользуется CFTools: скрыта, пока интеграция
   // выключена в настройках сервера.
-  { id: 'cftools', label: 'CFTools', icon: 'link', optional: true },
-  { id: 'diag', label: 'Диагностика', icon: 'bug' }
+  { id: 'cftools', label: 'CFTools', icon: 'link', optional: true, permission: 'settings.view' },
+  { id: 'diag', label: 'Диагностика', icon: 'bug', permission: 'settings.view' }
 ];
 
 let currentTab = 'overview';
@@ -121,6 +126,27 @@ function syncOptionalTabs() {
 
   // Интеграцию могли выключить, пока её вкладка открыта.
   if (!cfEnabled && currentTab === 'cftools') showTab('overview');
+
+  syncPermissionTabs();
+}
+
+/** Спрятать вкладки, на которые у вошедшего нет прав. */
+function syncPermissionTabs() {
+  for (const item of TABS) {
+    if (!item.permission) continue;
+
+    const node = document.querySelector(`#dash-tabs [data-tab="${item.id}"]`);
+    if (!node) continue;
+
+    const allowed = can(item.permission);
+    node.classList.toggle('hidden', !allowed);
+    if (!allowed && currentTab === item.id) showTab(firstAllowedTab());
+  }
+}
+
+function firstAllowedTab() {
+  const item = TABS.find((t) => !t.permission || can(t.permission));
+  return item ? item.id : 'overview';
 }
 
 export function showTab(id) {

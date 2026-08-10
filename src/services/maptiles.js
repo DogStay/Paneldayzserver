@@ -309,6 +309,13 @@ async function tile(world, layer, z, x, y) {
     throw error;
   }
 
+  // Карта нарезана вручную: чего нет на диске, того нет вообще.
+  if (isLocal(world, kind)) {
+    const error = new Error('этого тайла нет в нарезанной карте');
+    error.code = 'missing';
+    throw error;
+  }
+
   const template = templateFor(world, kind);
   if (!template) {
     const error = new Error(`для карты «${worldOf(world) || '—'}» не известен адрес тайлов`);
@@ -399,6 +406,59 @@ function contentTypeOf(file) {
   return 'image/webp';
 }
 
+/* ------------------------------------------------------- локальные тайлы */
+
+/**
+ * Своя карта, нарезанная на тайлы.
+ *
+ * Картинку карты в 150 МБ браузер одним файлом не осилит: ему пришлось бы
+ * держать в памяти целый растр (16000×16000 — это больше гигабайта). Поэтому
+ * нарезкой занимается браузер админа один раз: он читает файл локально, режет на
+ * тайлы 256×256 по уровням масштаба и отправляет их в панель. Дальше карта
+ * работает как обычная тайловая — грузятся только видимые куски.
+ *
+ * Тайлы ложатся в тот же кэш, что и скачанные из интернета, поэтому рисовать их
+ * умеет уже написанный код. Отличие одно: рядом лежит метка .local, и при её
+ * наличии панель никогда не ходит в сеть за этой картой.
+ */
+function localMarker(world, layer) {
+  return path.join(cacheRoot(), worldOf(world) || 'unknown', layer, '.local');
+}
+
+function isLocal(world, layer) {
+  return fs.existsSync(localMarker(world, layer));
+}
+
+/** Записать один нарезанный тайл. */
+function saveTile(world, layer, z, x, y, body) {
+  const kind = layer === 'satellite' ? 'satellite' : 'topographic';
+
+  if (!looksLikeImage(body)) throw new Error('тайл не картинка');
+  if (body.length > 4 * 1024 * 1024) throw new Error('тайл больше 4 МБ — это точно не тайл 256×256');
+
+  const zoom = Number(z);
+  const span = 2 ** zoom;
+  if (!Number.isInteger(zoom) || zoom < 0 || zoom > MAX_ZOOM) throw new Error(`зум вне диапазона 0…${MAX_ZOOM}`);
+  if (!(Number(x) >= 0 && Number(x) < span && Number(y) >= 0 && Number(y) < span)) {
+    throw new Error('тайл за границами карты');
+  }
+
+  const file = tilePath(world, kind, zoom, Number(x), Number(y));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, body);
+
+  // Метка «карта своя»: с ней панель не пойдёт в интернет за отсутствующими
+  // тайлами — их там и нет, а лишние запросы только тормозили бы карту.
+  const marker = localMarker(world, kind);
+  if (!fs.existsSync(marker)) {
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, new Date().toISOString(), 'utf8');
+    logger.info(SOURCE, `Карта «${worldOf(world)}» переведена на свои тайлы (${kind})`);
+  }
+
+  return { saved: true, bytes: body.length };
+}
+
 /* --------------------------------------------------- своя картинка карты */
 
 /**
@@ -412,7 +472,7 @@ function contentTypeOf(file) {
  * Резать на тайлы не нужно — карта рисуется на холсте одним изображением.
  */
 const IMAGE_ROOT = path.join(__dirname, '..', '..', 'data', 'maps');
-const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 512 * 1024 * 1024;
 
 function imageFile(world) {
   const name = worldOf(world) || 'unknown';
@@ -480,7 +540,7 @@ function saveImage(world, body, contentType) {
         'возьмите прямую ссылку на файл или загрузите файл с компьютера'
     );
   }
-  if (body.length > MAX_IMAGE_BYTES) throw new Error('картинка больше 64 МБ — возьмите поменьше');
+  if (body.length > MAX_IMAGE_BYTES) throw new Error('картинка больше 512 МБ — нарежьте её на тайлы кнопкой «Нарезать на тайлы»');
 
   const measured = imageSize(body) || {};
   const type = measured.type || contentType || '';
@@ -604,14 +664,16 @@ function status(world) {
       hasSource: Boolean(template)
     },
     cache: cacheStats(world),
+    localTiles: isLocal(world, s.layer),
     image: imageInfo(world),
     lastError: (freshFailure(`${worldOf(world)}/${s.layer}`) || {}).reason || '',
-    reason: reasonFor(entry, template, s)
+    reason: reasonFor(entry, template, s, isLocal(world, s.layer))
   };
 }
 
-function reasonFor(entry, template, s) {
+function reasonFor(entry, template, s, local) {
   if (!s.enabled) return 'подложка выключена в настройках панели';
+  if (local) return '';
   if (template) return '';
   if (!entry) {
     return (
@@ -637,6 +699,8 @@ module.exports = {
   imageInfo,
   setImage,
   saveImage,
+  saveTile,
+  isLocal,
   directUrl,
   clearImage,
   cacheStats,

@@ -179,6 +179,22 @@ function normalize(cfg) {
   c.panel.auth.sessionHours = clamp(toInt(c.panel.auth.sessionHours, 12), 1, 720);
   c.panel.auth.trustProxy = Boolean(c.panel.auth.trustProxy);
 
+  // Регистрация: по умолчанию закрыта, а новичок ждёт подтверждения владельцем.
+  c.panel.auth.registration = c.panel.auth.registration || {};
+  c.panel.auth.registration.enabled = Boolean(c.panel.auth.registration.enabled);
+  c.panel.auth.registration.defaultRoleId = String(c.panel.auth.registration.defaultRoleId || 'watcher');
+  c.panel.auth.registration.requireApproval = c.panel.auth.registration.requireApproval !== false;
+
+  // Вход через Discord (OAuth2). Секрет наружу не отдаётся — см. publicView.
+  c.panel.auth.discord = c.panel.auth.discord || {};
+  c.panel.auth.discord.enabled = Boolean(c.panel.auth.discord.enabled);
+  c.panel.auth.discord.clientId = String(c.panel.auth.discord.clientId || '').trim();
+  c.panel.auth.discord.clientSecret = String(c.panel.auth.discord.clientSecret || '').trim();
+  c.panel.auth.discord.redirectUri = String(c.panel.auth.discord.redirectUri || '').trim();
+  c.panel.auth.discord.allowRegistration = c.panel.auth.discord.allowRegistration !== false;
+  c.panel.auth.discord.requireApproval = c.panel.auth.discord.requireApproval !== false;
+  c.panel.auth.discord.defaultRoleId = String(c.panel.auth.discord.defaultRoleId || 'watcher');
+
   // Токены интеграций (сайт, Discord-бот). Живут в конфиге, а не в памяти:
   // им нужно переживать перезапуск панели.
   c.panel.apiTokens = (Array.isArray(c.panel.apiTokens) ? c.panel.apiTokens : [])
@@ -521,6 +537,12 @@ function publicView() {
 
   copy.cftools.secret = '';
   copy.cftools.hasSecret = Boolean(cfg.cftools.secret);
+
+  // Секрет приложения Discord — такая же тайна, как пароль Steam.
+  if (copy.panel.auth && copy.panel.auth.discord) {
+    copy.panel.auth.discord.clientSecret = '';
+    copy.panel.auth.discord.hasSecret = Boolean(cfg.panel.auth.discord.clientSecret);
+  }
 
   // Значения API-токенов наружу не отдаём даже вошедшему администратору:
   // для этого есть отдельный маршрут со списком и превью.

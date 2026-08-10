@@ -37,6 +37,9 @@ const access = require('../services/access');
 const eventlog = require('../services/eventlog');
 const maptiles = require('../services/maptiles');
 const adminlog = require('../services/adminlog');
+const users = require('../services/users');
+const discord = require('../services/discord');
+const permissions = require('../services/permissions');
 
 const router = express.Router();
 
@@ -125,6 +128,162 @@ router.post('/auth/logout', (req, res) => {
   res.setHeader('Set-Cookie', auth.clearCookieHeader());
   res.json({ ok: true });
 });
+
+/* ------------------------------------------------------- аккаунты и вход */
+
+/**
+ * Вход по логину и паролю. Мастер-ключи остаются только для первичной
+ * настройки — пока в панели нет ни одного аккаунта.
+ */
+router.post('/auth/login/password', (req, res) => {
+  const body = req.body || {};
+  const result = auth.loginWithPassword(req, body.login, body.password);
+  if (!result.ok) return res.status(result.status || 401).json({ error: result.error });
+
+  res.setHeader('Set-Cookie', auth.cookieHeader(result.token, result.expiresAt));
+  res.json({ ok: true, user: result.user, expiresAt: result.expiresAt });
+});
+
+/** Регистрация. Разрешена, только если владелец её включил. */
+router.post(
+  '/auth/register',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const cfg = config.load();
+    const registration = (cfg.panel.auth && cfg.panel.auth.registration) || {};
+
+    // Первый аккаунт — особый случай: панель ещё никому не принадлежит, поэтому
+    // владельца создаём по мастер-ключу из окна панели.
+    if (users.isEmpty()) {
+      const check = auth.login(req, body.key);
+      if (!check.ok) {
+        return res.status(check.status || 401).json({
+          error: check.error || 'Для создания первого аккаунта введите мастер-ключ из окна панели'
+        });
+      }
+
+      const owner = users.create({ login: body.login, password: body.password, name: body.name });
+      const session = auth.sessionForUser(req, users.byId(owner.id));
+
+      res.setHeader('Set-Cookie', auth.cookieHeader(session.token, session.expiresAt));
+      logger.info('auth', `Создан владелец панели «${owner.name}» — мастер-ключи больше не действуют`);
+      return res.json({ ok: true, user: owner, owner: true });
+    }
+
+    if (!registration.enabled) {
+      return res.status(403).json({ error: 'Регистрация закрыта. Попросите владельца панели создать вам аккаунт' });
+    }
+
+    const created = users.create({
+      login: body.login,
+      password: body.password,
+      name: body.name,
+      roleId: registration.defaultRoleId || 'watcher',
+      disabled: registration.requireApproval !== false
+    });
+
+    adminlog.note(config.activeServer() ? config.activeServer().id : '', 'аккаунты', `регистрация «${created.login}»`);
+
+    if (created.disabled) {
+      return res.json({ ok: true, pending: true, user: created });
+    }
+
+    const session = auth.sessionForUser(req, users.byId(created.id));
+    res.setHeader('Set-Cookie', auth.cookieHeader(session.token, session.expiresAt));
+    res.json({ ok: true, user: created });
+  })
+);
+
+/** Кто я и что мне можно — по этому интерфейс скрывает недоступное. */
+router.get('/auth/me', (req, res) => {
+  const user = auth.userOf(req);
+
+  res.json({
+    user: user ? users.publicUser(user) : null,
+    master: Boolean(!user && auth.sessionOf(req)),
+    permissions: user ? users.permissionsOf(user) : [],
+    catalogue: users.PERMISSIONS
+  });
+});
+
+/** Смена своего пароля. */
+router.post(
+  '/auth/password',
+  wrap(async (req, res) => {
+    const user = auth.userOf(req);
+    if (!user) throw new Error('Сменить пароль можно только своему аккаунту');
+
+    const body = req.body || {};
+    if (user.password) {
+      const check = users.verify(user.login, body.current);
+      if (!check.ok) return res.status(401).json({ error: 'Текущий пароль неверный' });
+    }
+
+    users.update(user.id, { password: body.password });
+    res.json({ ok: true });
+  })
+);
+
+/* ------------------------------------------------------------ вход Discord */
+
+router.get('/auth/discord/start', (req, res) => {
+  try {
+    res.setHeader('Location', discord.startUrl());
+    res.status(302).end();
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get(
+  '/auth/discord/callback',
+  wrap(async (req, res) => {
+    const { code, state } = req.query;
+
+    const fail = (message) => {
+      logger.warn('auth', `Вход через Discord не удался: ${message}`);
+      res.setHeader('Location', `/login.html?error=${encodeURIComponent(message)}`);
+      res.status(302).end();
+    };
+
+    if (!code) return fail('Discord не передал код авторизации');
+    if (!discord.checkState(state)) return fail('Просроченная или чужая ссылка входа — начните заново');
+
+    let user;
+    try {
+      const profile = await discord.profileByCode(code);
+      user = discord.linkAccount(profile).user;
+    } catch (err) {
+      return fail(err.message);
+    }
+
+    const session = auth.sessionForUser(req, user);
+    res.setHeader('Set-Cookie', auth.cookieHeader(session.token, session.expiresAt));
+    res.setHeader('Location', '/');
+    res.status(302).end();
+  })
+);
+
+router.get('/auth/discord', (req, res) => res.json(discord.status()));
+
+/* ---------------------------------------------------------- аккаунты и роли */
+
+router.get('/users', (req, res) =>
+  res.json({ users: users.list(), roles: users.roles(), catalogue: users.PERMISSIONS })
+);
+
+router.post('/users', wrap(async (req, res) => res.json(users.create(req.body || {}))));
+router.patch('/users/:id', wrap(async (req, res) => res.json(users.update(req.params.id, req.body || {}))));
+
+router.delete('/users/:id', (req, res) => {
+  const me = auth.userOf(req);
+  if (me && me.id === req.params.id) throw new Error('Свой аккаунт удалить нельзя');
+  res.json(users.remove(req.params.id));
+});
+
+router.get('/roles', (req, res) => res.json({ roles: users.roles(), catalogue: users.PERMISSIONS }));
+router.post('/roles', wrap(async (req, res) => res.json(users.saveRole(req.body || {}))));
+router.delete('/roles/:id', (req, res) => res.json(users.removeRole(req.params.id)));
 
 /** Ключи текущего запуска — чтобы передать второй ключ коллеге. */
 router.get('/auth/keys', sessionOnly, (req, res) => res.json({ keys: auth.listKeys(), issuedAt: auth.status(req).keysIssuedAt }));
@@ -365,6 +524,10 @@ router.put(
     if (patch.steam && patch.steam.password === '') delete patch.steam.password;
     if (patch.steam && patch.steam.webApiKey === '') delete patch.steam.webApiKey;
     if (patch.cftools && patch.cftools.secret === '') delete patch.cftools.secret;
+    // Пустой секрет Discord означает «не менять», как и у Steam с CFTools.
+    if (patch.panel && patch.panel.auth && patch.panel.auth.discord && patch.panel.auth.discord.clientSecret === '') {
+      delete patch.panel.auth.discord.clientSecret;
+    }
     delete patch.servers;
     delete patch.activeServerId;
 
@@ -758,6 +921,26 @@ router.post(
   })
 );
 
+/**
+ * Приём одного нарезанного тайла от браузера.
+ *
+ * Нарезкой большой карты занимается браузер админа: у панели нет декодера
+ * картинок, а тянуть его ради одной операции в проект с единственной
+ * зависимостью не стоит. Браузер уже умеет и читать JPEG, и масштабировать.
+ */
+router.post(
+  '/map/tiles/:layer/:z/:x/:y',
+  express.raw({ type: ['image/*', 'application/octet-stream'], limit: '8mb' }),
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!body.length) throw new Error('тайл не получен');
+
+    const { layer, z, x, y } = req.params;
+    res.json(maptiles.saveTile(worldOf(serverId), layer, z, x, y, body));
+  })
+);
+
 router.delete('/map/tiles', (req, res) => {
   const serverId = serverIdOf(req);
   const all = req.query.all === '1';
@@ -859,6 +1042,24 @@ router.post(
   '/bridge/command',
   wrap(async (req, res) => {
     const body = req.body || {};
+
+    /*
+     * У команд разная цена: посмотреть инвентарь и вычистить его — разные права.
+     * Общая проверка маршрута этого не различает, поэтому здесь спрашиваем право
+     * именно за это действие.
+     */
+    const user = auth.userOf(req);
+    if (user) {
+      const needed = permissions.commandPermission(body.action);
+      if (!users.can(user, needed)) {
+        return res.status(403).json({
+          error: `Недостаточно прав для «${body.action}»: нужно «${users.PERMISSIONS[needed] || needed}»`,
+          auth: 'forbidden',
+          needed
+        });
+      }
+    }
+
     const result = await bridge.command(serverIdOf(req), body.action, body.args || {});
     res.json({ ok: true, action: body.action, result });
   })

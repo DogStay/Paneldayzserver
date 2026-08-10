@@ -119,79 +119,185 @@
     <div class="mark">🧟</div>
     <div>
       <h1>DayZ Panel</h1>
-      <div class="sub">вход по мастер-ключу</div>
+      <div class="sub" id="mode-sub">вход в панель</div>
     </div>
   </div>
 
-  <form id="form" autocomplete="off">
-    <label for="key">Мастер-ключ</label>
-    <input id="key" name="key" placeholder="XXXX-XXXX-XXXX" maxlength="14" autofocus
-           inputmode="text" spellcheck="false">
+  <!-- Вход логином и паролем -->
+  <form id="form-login" autocomplete="on">
+    <label for="login">Логин</label>
+    <input id="login" name="login" autocapitalize="none" spellcheck="false" autocomplete="username" autofocus>
+    <label for="password" style="margin-top:10px">Пароль</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
     <button type="submit" id="go">Войти</button>
   </form>
+
+  <!-- Регистрация или создание владельца при первом запуске -->
+  <form id="form-register" autocomplete="on" style="display:none">
+    <label for="r-name">Как вас зовут</label>
+    <input id="r-name" spellcheck="false" autocomplete="name">
+    <label for="r-login" style="margin-top:10px">Логин</label>
+    <input id="r-login" autocapitalize="none" spellcheck="false" autocomplete="username">
+    <label for="r-password" style="margin-top:10px">Пароль <span style="opacity:.6">(от 8 знаков)</span></label>
+    <input id="r-password" type="password" autocomplete="new-password">
+
+    <div id="key-field" style="display:none">
+      <label for="r-key" style="margin-top:10px">Мастер-ключ из окна панели</label>
+      <input id="r-key" placeholder="XXXX-XXXX-XXXX" maxlength="14" spellcheck="false">
+    </div>
+
+    <button type="submit" id="go-register">Создать аккаунт</button>
+  </form>
+
+  <button type="button" id="discord" style="display:none;margin-top:10px;background:#5865f2">
+    Войти через Discord
+  </button>
 
   <div class="err" id="err"></div>
   <div class="warn" id="warn"></div>
 
-  <div class="note">
-    Ключи печатаются в окне панели при её запуске — там же, где адрес и порт.
-    Они <b>новые при каждом запуске</b> панели, поэтому старый ключ после
-    перезапуска не подойдёт. Сессия держится <span id="hours">12</span> ч.
+  <div class="note" id="note">
+    <a href="#" id="to-register" style="color:#8fc3ff">Зарегистрироваться</a>
+    <span id="to-login-wrap" style="display:none">
+      <a href="#" id="to-login" style="color:#8fc3ff">Войти в существующий аккаунт</a>
+    </span>
+    <div style="margin-top:8px">Сессия держится <span id="hours">12</span> ч.</div>
   </div>
 </div>
 
 <script>
-  const form = document.getElementById('form');
-  const input = document.getElementById('key');
-  const button = document.getElementById('go');
+  /*
+   * Страница входа. Три случая:
+   *   1) в панели ещё нет аккаунтов — создаём владельца, для этого нужен
+   *      мастер-ключ из окна панели (иначе владельцем стал бы любой прохожий);
+   *   2) обычный вход логином и паролем или через Discord;
+   *   3) регистрация, если владелец её включил.
+   */
   const err = document.getElementById('err');
   const warn = document.getElementById('warn');
+  const formLogin = document.getElementById('form-login');
+  const formRegister = document.getElementById('form-register');
 
-  // Ключ приятнее вводить без дефисов — расставим их сами.
-  input.addEventListener('input', () => {
-    const clean = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
-    input.value = (clean.match(/.{1,4}/g) || []).join('-');
-  });
+  let state = { setup: false, registration: false, discord: false };
 
-  fetch('/api/auth/status')
-    .then((r) => r.json())
-    .then((s) => {
-      document.getElementById('hours').textContent = s.sessionHours;
-      if (s.authenticated) return (location.href = '/');
-      if (!s.https && !s.loopback) {
-        warn.style.display = 'block';
-        warn.innerHTML =
-          'Соединение без HTTPS: ключ передаётся по сети открытым текстом. Для доступа из интернета ' +
-          'поставьте панель за reverse-proxy с сертификатом или укажите <code>panel.tls</code> в настройках.';
-      }
-    })
-    .catch(() => {});
+  const show = (node, on) => (node.style.display = on ? '' : 'none');
 
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    err.style.display = 'none';
-    button.disabled = true;
-    button.textContent = 'Проверяю…';
+  function fail(message) {
+    err.textContent = message;
+    show(err, Boolean(message));
+  }
 
+  function mode(which) {
+    show(formLogin, which === 'login');
+    show(formRegister, which === 'register');
+    show(document.getElementById('discord'), state.discord && which === 'login');
+    show(document.getElementById('to-register'), which === 'login' && (state.registration || state.setup));
+    show(document.getElementById('to-login-wrap'), which === 'register' && !state.setup);
+
+    document.getElementById('mode-sub').textContent =
+      which === 'register' ? (state.setup ? 'первый запуск: создайте владельца' : 'регистрация') : 'вход в панель';
+    document.getElementById('go-register').textContent = state.setup ? 'Стать владельцем панели' : 'Создать аккаунт';
+    show(document.getElementById('key-field'), state.setup);
+  }
+
+  async function loadState() {
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: input.value })
-      });
-      const data = await response.json().catch(() => ({}));
+      const res = await fetch('/api/auth/status');
+      const data = await res.json();
 
-      if (!response.ok) throw new Error(data.error || `Ошибка ${response.status}`);
+      state.setup = Boolean(data.setup);
+      state.registration = Boolean(data.registration);
+      state.discord = Boolean(data.discord);
+      document.getElementById('hours').textContent = data.sessionHours || 12;
+
+      if (data.insecure) {
+        warn.innerHTML =
+          'Соединение без HTTPS: пароль пойдёт по сети открытым текстом. ' +
+          'Для доступа из интернета включите TLS или поставьте reverse-proxy.';
+        show(warn, true);
+      }
+    } catch (_) {
+      /* панель ответит на попытке входа */
+    }
+
+    // Ошибку из перехода Discord показываем сразу.
+    const params = new URLSearchParams(location.search);
+    if (params.get('error')) fail(params.get('error'));
+
+    mode(state.setup ? 'register' : 'login');
+  }
+
+  async function send(url, body) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Ошибка ${res.status}`);
+    return data;
+  }
+
+  formLogin.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    fail('');
+
+    const button = document.getElementById('go');
+    button.disabled = true;
+    try {
+      await send('/api/auth/login/password', {
+        login: document.getElementById('login').value.trim(),
+        password: document.getElementById('password').value
+      });
       location.href = '/';
-    } catch (error) {
-      err.textContent = error.message;
-      err.style.display = 'block';
-      input.select();
-    } finally {
+    } catch (e) {
+      fail(e.message);
       button.disabled = false;
-      button.textContent = 'Войти';
     }
   });
+
+  formRegister.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    fail('');
+
+    const button = document.getElementById('go-register');
+    button.disabled = true;
+    try {
+      const result = await send('/api/auth/register', {
+        name: document.getElementById('r-name').value.trim(),
+        login: document.getElementById('r-login').value.trim(),
+        password: document.getElementById('r-password').value,
+        key: document.getElementById('r-key').value.trim()
+      });
+
+      if (result.pending) {
+        formRegister.style.display = 'none';
+        warn.textContent = 'Аккаунт создан и ждёт подтверждения владельцем панели.';
+        show(warn, true);
+        return;
+      }
+      location.href = '/';
+    } catch (e) {
+      fail(e.message);
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById('discord').addEventListener('click', () => {
+    location.href = '/api/auth/discord/start';
+  });
+
+  document.getElementById('to-register').addEventListener('click', (e) => {
+    e.preventDefault();
+    mode('register');
+  });
+  document.getElementById('to-login').addEventListener('click', (e) => {
+    e.preventDefault();
+    mode('login');
+  });
+
+  loadState();
 </script>
 
 </body>

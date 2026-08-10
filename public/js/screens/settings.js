@@ -537,6 +537,17 @@ Discord сервера: discord.gg/…">${esc((an.messages || []).join('\n'))}</
 
     <div class="card">
       <div class="card-head">
+        <span class="card-title-icon">${icon('users')}</span>
+        <div><h2>Аккаунты и права</h2>
+          <div class="card-sub">Кто заходит в панель и что ему доступно</div></div>
+        <span class="spacer"></span>
+        <button class="btn btn-sm btn-primary" id="user-add" type="button">${icon('plus')} Новый аккаунт</button>
+      </div>
+      <div id="users-box"><div class="small faint">Читаю список аккаунтов…</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <span class="card-title-icon">${icon('key')}</span>
         <div><h2>Доступ к панели</h2>
           <div class="card-sub">Мастер-ключи и активные сессии</div></div>
@@ -576,6 +587,7 @@ function bind(server) {
   bindAccess();
   bindAuth();
   bindTiles();
+  bindUsers();
 
   paneRef.querySelector('#cf-test').addEventListener('click', (e) =>
     busy(e.currentTarget, async () => {
@@ -874,6 +886,200 @@ function openExposedModal(result) {
  * Тайлы панель скачивает сама и держит на диске, поэтому карта работает и без
  * интернета на машине сервера — но первый показ каждого участка требует сети.
  */
+/**
+ * Аккаунты, роли и права.
+ *
+ * Права выдаются двумя слоями: роль задаёт основу, а личные «плюсы» и «минусы»
+ * подгоняют её под человека. Запрет сильнее выдачи — так проще отобрать одну
+ * возможность, не заводя отдельную роль.
+ */
+function bindUsers() {
+  const box = paneRef.querySelector('#users-box');
+
+  const render = async () => {
+    let data;
+    try {
+      data = await api.users();
+    } catch (err) {
+      box.innerHTML = `<div class="notice warn"><span class="ic">${icon('alert')}</span>
+        <div>${esc(err.message)}</div></div>`;
+      return;
+    }
+
+    const roleOptions = (selected) =>
+      data.roles
+        .map((role) => `<option value="${esc(role.id)}" ${role.id === selected ? 'selected' : ''}>${esc(role.name)}</option>`)
+        .join('');
+
+    box.innerHTML = `
+      <div class="mod-list">
+        ${data.users
+          .map(
+            (user) => `
+              <div class="mod-row" data-user="${esc(user.id)}">
+                <div style="flex:1;min-width:0">
+                  <div><b>${esc(user.name)}</b>
+                    ${user.login ? `<span class="small faint">${esc(user.login)}</span>` : ''}
+                    ${user.hasDiscord ? `<span class="badge">Discord: ${esc(user.discordTag || 'привязан')}</span>` : ''}
+                    ${user.disabled ? '<span class="badge" style="color:#ffb4b4">ждёт подтверждения / отключён</span>' : ''}
+                  </div>
+                  <div class="small faint">${user.permissions.includes('*') ? 'все права' : `прав: ${user.permissions.length}`}
+                    ${user.lastLoginAt ? ` · заходил ${esc(fmtDate(user.lastLoginAt))}` : ' · ещё не заходил'}</div>
+                </div>
+                <select data-role="${esc(user.id)}" style="width:170px">${roleOptions(user.roleId)}</select>
+                <button class="btn btn-sm" data-act="perms" title="Точные права">${icon('shield')}</button>
+                <button class="btn btn-sm" data-act="toggle">${user.disabled ? 'Включить' : 'Отключить'}</button>
+                <button class="btn btn-sm btn-danger" data-act="del">${icon('trash')}</button>
+              </div>`
+          )
+          .join('')}
+      </div>
+
+      <div class="hint" style="margin-top:10px">Роли: ${data.roles.map((r) => esc(r.name)).join(', ')}.
+        Точные права правятся по кнопке со щитом: там можно добавить человеку одну возможность
+        поверх роли или отобрать её.</div>`;
+
+    box.querySelectorAll('select[data-role]').forEach((select) =>
+      select.addEventListener('change', (e) =>
+        busy(e.currentTarget, async () => {
+          await api.patchUser(e.currentTarget.dataset.role, { roleId: e.currentTarget.value });
+          toast('Роль изменена', 'ok');
+          await render();
+        })
+      )
+    );
+
+    box.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-act]');
+      if (!button) return;
+
+      const id = button.closest('[data-user]').dataset.user;
+      const user = data.users.find((item) => item.id === id);
+      if (!user) return;
+
+      if (button.dataset.act === 'toggle') {
+        return void busy(button, async () => {
+          await api.patchUser(id, { disabled: !user.disabled });
+          toast(user.disabled ? 'Аккаунт включён' : 'Аккаунт отключён', 'ok');
+          await render();
+        });
+      }
+
+      if (button.dataset.act === 'del') {
+        return void confirmDialog({
+          title: 'Удалить аккаунт?',
+          message: `Аккаунт «${esc(user.name)}» будет удалён. Человек потеряет доступ к панели.`,
+          confirmText: 'Удалить',
+          danger: true
+        }).then((ok) => {
+          if (ok) {
+            busy(button, async () => {
+              await api.deleteUser(id);
+              toast('Аккаунт удалён', 'ok');
+              await render();
+            });
+          }
+        });
+      }
+
+      if (button.dataset.act === 'perms') showPermissions(user, data.catalogue, render);
+    });
+  };
+
+  paneRef.querySelector('#user-add').addEventListener('click', async () => {
+    let data;
+    try {
+      data = await api.users();
+    } catch (err) {
+      return void toast(err.message, 'err');
+    }
+
+    const m = modal({
+      title: 'Новый аккаунт',
+      subtitle: 'Человек войдёт логином и паролем; Discord можно привязать позже',
+      icon: 'users',
+      body: `
+        <div class="form-grid">
+          <div class="field"><label>Имя</label><input type="text" id="nu-name"></div>
+          <div class="field"><label>Логин</label><input type="text" id="nu-login" autocapitalize="none"></div>
+          <div class="field"><label>Пароль <span class="badge">от 8 знаков</span></label>
+            <input type="password" id="nu-password"></div>
+          <div class="field"><label>Роль</label>
+            <select id="nu-role">${data.roles
+              .map((role) => `<option value="${esc(role.id)}">${esc(role.name)}</option>`)
+              .join('')}</select></div>
+        </div>`,
+      footer: `<span class="spacer"></span>
+        <button class="btn" data-close>Отмена</button>
+        <button class="btn btn-primary" id="nu-go">Создать</button>`
+    });
+
+    m.footer.querySelector('#nu-go').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        await api.createUser({
+          name: m.body.querySelector('#nu-name').value.trim(),
+          login: m.body.querySelector('#nu-login').value.trim(),
+          password: m.body.querySelector('#nu-password').value,
+          roleId: m.body.querySelector('#nu-role').value
+        });
+        m.close();
+        toast('Аккаунт создан', 'ok');
+        await render();
+      })
+    );
+  });
+
+  render();
+}
+
+/** Точные права: галочка — есть, минус — отобрано лично у этого человека. */
+function showPermissions(user, catalogue, reload) {
+  const rows = Object.entries(catalogue)
+    .map(([key, label]) => {
+      const granted = user.permissions.includes('*') || user.permissions.includes(key);
+      const denied = user.deny.includes(key);
+
+      return `
+        <label class="chip" style="display:flex;gap:8px;align-items:center;padding:7px 10px">
+          <input type="checkbox" data-perm="${esc(key)}" ${granted && !denied ? 'checked' : ''}>
+          <span style="flex:1">${esc(label)}<span class="small faint"> ${esc(key)}</span></span>
+        </label>`;
+    })
+    .join('');
+
+  const m = modal({
+    title: `Права: ${user.name}`,
+    subtitle: user.permissions.includes('*')
+      ? 'Это владелец — у него все права всегда'
+      : 'Галочка добавляет право поверх роли, снятая — отбирает его лично у этого человека',
+    icon: 'shield',
+    body: `<div class="col" style="gap:6px">${rows}</div>`,
+    footer: `<span class="spacer"></span>
+      <button class="btn" data-close>Отмена</button>
+      <button class="btn btn-primary" id="perm-go">Сохранить</button>`
+  });
+
+  m.footer.querySelector('#perm-go').addEventListener('click', (e) =>
+    busy(e.currentTarget, async () => {
+      const grant = [];
+      const deny = [];
+
+      m.body.querySelectorAll('input[data-perm]').forEach((input) => {
+        const key = input.dataset.perm;
+        const roleHas = user.permissions.includes(key) && !user.grant.includes(key);
+
+        if (input.checked && !roleHas) grant.push(key);
+        if (!input.checked && roleHas) deny.push(key);
+      });
+
+      await api.patchUser(user.id, { grant, deny });
+      m.close();
+      toast('Права сохранены', 'ok');
+      await reload();
+    })
+  );
+}
+
 function bindTiles() {
   const box = paneRef.querySelector('#tiles-box');
 
@@ -925,8 +1131,10 @@ function bindTiles() {
 
         <div class="row wrap" style="gap:8px">
           <input type="file" id="tiles-image-file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0">
-          <button class="btn btn-primary" id="tiles-image-upload" type="button">${icon('folder')} Загрузить файл</button>
+          <button class="btn btn-primary" id="tiles-image-slice" type="button">${icon('map')} Нарезать на тайлы</button>
+          <button class="btn" id="tiles-image-upload" type="button">${icon('folder')} Загрузить целиком</button>
         </div>
+        <div class="hint" id="tiles-slice-progress" style="margin-top:6px"></div>
 
         <div class="row" style="gap:8px;margin-top:8px">
           <input type="text" id="tiles-image-url" placeholder="или ссылка: https://…/raman.jpg или Google Диск"
@@ -936,6 +1144,11 @@ function bindTiles() {
         </div>
 
         <div class="hint">${
+          info.localTiles
+            ? `Карта нарезана на свои тайлы (${info.cache.files} шт., ${Math.round(info.cache.bytes / 1024 / 1024)} МБ) —
+               грузятся только видимые куски, интернет не нужен.`
+            : ''
+        }${
           info.image && info.image.exists
             ? `Загружена картинка ${info.image.width}×${info.image.height}, ${Math.round(info.image.bytes / 1024)} КБ —
                она рисуется под метками, тайлы не нужны.` +
@@ -943,8 +1156,10 @@ function bindTiles() {
                 ? ''
                 : ' <b>Картинка не квадратная</b>, а мир в DayZ квадратный: она растянется, и метки игроков' +
                   ' встанут неточно. Обрежьте её по краям карты.')
-            : 'Проще всего — выбрать файл на компьютере. Ссылка тоже подойдёт: Google Диск и Dropbox панель' +
-              ' приводит к прямой ссылке сама. Картинка должна быть квадратной — это карта целиком, без рамок.'
+            : 'Выберите файл карты и нажмите <b>«Нарезать на тайлы»</b> — так работают карты любого размера,' +
+              ' включая 150 МБ: браузер режет картинку у себя, панель хранит куски, и грузятся только видимые.' +
+              ' «Загрузить целиком» подойдёт для небольшой картинки (до 512 МБ, но браузер должен её осилить).' +
+              ' Картинка должна быть квадратной — это карта целиком, без рамок.'
         }</div>
       </div>
 
@@ -960,6 +1175,37 @@ function bindTiles() {
           panel: { map: { tiles: { enabled: value !== 'off', ...(value === 'off' ? {} : { layer: value }) } } }
         });
         toast('Подложка обновлена — откройте вкладку «Карта»', 'ok');
+        await render();
+      })
+    );
+
+    box.querySelector('#tiles-image-slice').addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const input = box.querySelector('#tiles-image-file');
+        const file = input.files && input.files[0];
+        if (!file) return void toast('Сначала выберите файл карты', 'warn');
+
+        const note = box.querySelector('#tiles-slice-progress');
+        const { sliceMapImage } = await import('../mapslicer.js');
+
+        // Прежние тайлы этой карты убираем: иначе останутся куски старой.
+        await api.clearMapTiles(false);
+
+        const result = await sliceMapImage(file, {
+          layer: 'topographic',
+          upload: api.uploadMapTile,
+          onProgress: (done, total, step) => {
+            note.textContent = `Нарезаю: ${done} из ${total} тайлов (${step})`;
+          }
+        });
+
+        note.textContent = '';
+        toast(
+          `Карта нарезана: ${result.tiles} тайлов, ${result.zooms} уровней, ` +
+            `${Math.round(result.bytes / 1024 / 1024)} МБ на диске`,
+          'ok',
+          12000
+        );
         await render();
       })
     );

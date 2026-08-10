@@ -50,6 +50,17 @@ export const api = {
   accessExpose: (host) => request('POST', '/access/expose', { host: host || '0.0.0.0' }),
 
   authStatus: () => request('GET', '/auth/status'),
+  me: () => request('GET', '/auth/me'),
+  changePassword: (current, password) => request('POST', '/auth/password', { current, password }),
+
+  users: () => request('GET', '/users'),
+  createUser: (data) => request('POST', '/users', data),
+  patchUser: (id, patch) => request('PATCH', `/users/${encodeURIComponent(id)}`, patch),
+  deleteUser: (id) => request('DELETE', `/users/${encodeURIComponent(id)}`),
+  roles: () => request('GET', '/roles'),
+  saveRole: (data) => request('POST', '/roles', data),
+  deleteRole: (id) => request('DELETE', `/roles/${encodeURIComponent(id)}`),
+  discordStatus: () => request('GET', '/auth/discord'),
   authKeys: () => request('GET', '/auth/keys'),
   authRotate: () => request('POST', '/auth/rotate', {}),
   authSessions: () => request('GET', '/auth/sessions'),
@@ -112,6 +123,26 @@ export const api = {
   /* Подложка карты: тайлы отдаёт сама панель, кэшируя их на диске */
   map: () => request('GET', '/map'),
   clearMapTiles: (all) => request('DELETE', `/map/tiles${all ? '?all=1' : ''}`),
+
+  /** Один нарезанный тайл: отправляем байтами, как и картинку карты. */
+  uploadMapTile: async (layer, z, x, y, blob) => {
+    const res = await fetch(`/api/map/tiles/${layer}/${z}/${x}/${y}`, {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'image/png' },
+      body: blob
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch (_) {
+        data = null;
+      }
+      throw new Error((data && data.error) || `Ошибка ${res.status}`);
+    }
+    return res.json();
+  },
   testMapTiles: (layer) => request('POST', '/map/test', { layer }),
   setMapImage: (url) => request('POST', '/map/image', { url }),
 

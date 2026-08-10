@@ -12,6 +12,9 @@ const listeners = new Map();
 export const state = {
   connected: false,
   auth: null,
+  /** Кто вошёл и что ему можно: /api/auth/me. */
+  me: null,
+  permissions: [],
   panel: null,
   hasServers: false,
   activeServerId: null,
@@ -66,8 +69,43 @@ export async function refreshStatus() {
   return data;
 }
 
+/**
+ * Кто вошёл и какие у него права.
+ *
+ * По этому списку интерфейс скрывает недоступное: человеку с доступом «только
+ * логи» незачем видеть моды и порты, а его браузеру — собирать отказы 403.
+ */
+export async function refreshMe() {
+  try {
+    const data = await api.me();
+    state.me = data.user;
+    state.permissions = data.permissions || [];
+    // Вход по мастер-ключу при первичной настройке: прав ещё нет, но можно всё.
+    if (!state.me && data.master) state.permissions = ['*'];
+  } catch (_) {
+    state.me = null;
+    state.permissions = ['*'];
+  }
+
+  emit('me', state.me);
+  return state.me;
+}
+
+/** Есть ли у вошедшего право. Владелец («*») может всё. */
+export function can(permission) {
+  if (!state.permissions || !state.permissions.length) return true;
+  return state.permissions.includes('*') || state.permissions.includes(permission);
+}
+
 export async function refreshConfig() {
-  state.config = await api.config();
+  try {
+    state.config = await api.config();
+  } catch (err) {
+    // Настройки видны не всем: у «только логов» их нет, и это нормально.
+    if (!/прав/i.test(err.message)) throw err;
+    state.config = null;
+  }
+
   emit('config', state.config);
   return state.config;
 }

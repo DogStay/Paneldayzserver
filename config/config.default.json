@@ -8,7 +8,21 @@
       "enabled": "auto",
       "keyCount": 3,
       "sessionHours": 12,
-      "trustProxy": false
+      "trustProxy": false,
+      "registration": {
+        "enabled": false,
+        "defaultRoleId": "watcher",
+        "requireApproval": true
+      },
+      "discord": {
+        "enabled": false,
+        "clientId": "",
+        "clientSecret": "",
+        "redirectUri": "",
+        "allowRegistration": true,
+        "requireApproval": true,
+        "defaultRoleId": "watcher"
+      }
     },
     "apiTokens": [],
     "map": {

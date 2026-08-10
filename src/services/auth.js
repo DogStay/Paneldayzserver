@@ -23,6 +23,8 @@
 const crypto = require('crypto');
 
 const config = require('./../config');
+const users = require('./users');
+const { permissionFor } = require('./permissions');
 const logger = require('../logger');
 
 const SOURCE = 'auth';
@@ -146,11 +148,11 @@ function listKeys() {
 
 /* ------------------------------------------------------------- сессии */
 
-function createSession(keyIndex, ip, agent) {
+function createSession(keyIndex, ip, agent, userId = '') {
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = Date.now() + sessionHours() * 3600_000;
 
-  sessions.set(token, { createdAt: Date.now(), expiresAt, keyIndex, ip, agent });
+  sessions.set(token, { createdAt: Date.now(), expiresAt, keyIndex, ip, agent, userId });
   return { token, expiresAt };
 }
 
@@ -239,6 +241,14 @@ function login(req, rawKey) {
     };
   }
 
+  if (!users.isEmpty()) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Мастер-ключи выключены: в панели есть аккаунты. Входите логином и паролем или через Discord'
+    };
+  }
+
   const key = String(rawKey || '').trim().toUpperCase();
   if (!key) return { ok: false, status: 400, error: 'Введите мастер-ключ' };
 
@@ -262,6 +272,59 @@ function login(req, rawKey) {
   logger.info(SOURCE, `Вход по ключу №${matched + 1} с адреса ${ip}`);
 
   return { ok: true, ...session, keyIndex: matched + 1 };
+}
+
+/**
+ * Вход по логину и паролю.
+ *
+ * Ограничитель попыток тот же, что у мастер-ключей: пять промахов с адреса — и
+ * он отдыхает, иначе пароль можно перебирать.
+ */
+function loginWithPassword(req, rawLogin, rawPassword) {
+  const ip = ipOf(req);
+  const blocked = blockedFor(ip);
+
+  if (blocked > 0) {
+    return {
+      ok: false,
+      status: 429,
+      error: `Слишком много неудачных попыток. Повторите через ${Math.ceil(blocked / 60000)} мин.`
+    };
+  }
+
+  const login = String(rawLogin || '').trim();
+  if (!login || !rawPassword) return { ok: false, status: 400, error: 'Введите логин и пароль' };
+
+  const result = users.verify(login, rawPassword);
+  if (!result.ok) {
+    noteFailure(ip);
+    logger.warn(SOURCE, `Неудачный вход «${login}» с адреса ${ip}: ${result.error}`);
+    return { ok: false, status: 401, error: result.error };
+  }
+
+  attempts.delete(ip);
+  const session = createSession(0, ip, String(req.headers['user-agent'] || '').slice(0, 120), result.user.id);
+  users.touchLogin(result.user.id);
+
+  logger.info(SOURCE, `Вход «${result.user.name}» (${login}) с адреса ${ip}`);
+  return { ok: true, ...session, user: users.publicUser(result.user) };
+}
+
+/** Вошедший пользователь по сессии — либо null (мастер-ключ или нет входа). */
+function userOf(req) {
+  const session = sessionOf(req);
+  if (!session || !session.userId) return null;
+
+  const user = users.byId(session.userId);
+  if (!user || user.disabled) return null;
+  return user;
+}
+
+/** Создать сессию для пользователя (вход через Discord и первичная настройка). */
+function sessionForUser(req, user) {
+  const session = createSession(0, ipOf(req), String(req.headers['user-agent'] || '').slice(0, 120), user.id);
+  users.touchLogin(user.id);
+  return session;
 }
 
 /** Заголовок Set-Cookie для сессии. */
@@ -289,7 +352,16 @@ function tls() {
 /* ------------------------------------------------------------ middleware */
 
 /** Пути, доступные без входа: страница входа и сам вход. */
-const PUBLIC_PATHS = new Set(['/login.html', '/api/auth/login', '/api/auth/status', '/favicon.ico']);
+const PUBLIC_PATHS = new Set([
+  '/login.html',
+  '/api/auth/login',
+  '/api/auth/login/password',
+  '/api/auth/register',
+  '/api/auth/status',
+  '/api/auth/discord/start',
+  '/api/auth/discord/callback',
+  '/favicon.ico'
+]);
 
 function middleware() {
   return (req, res, next) => {
@@ -299,7 +371,30 @@ function middleware() {
     const url = req.path || req.url.split('?')[0];
     if (PUBLIC_PATHS.has(url)) return next();
 
-    if (sessionOf(req)) return next();
+    const session = sessionOf(req);
+    if (session) {
+      // Мастер-ключ действует только пока нет ни одного аккаунта: он для
+      // первичной настройки, а дальше вход именной, с правами.
+      if (!session.userId) return next();
+
+      const user = users.byId(session.userId);
+      if (!user || user.disabled) {
+        sessions.delete(session.token);
+        return deny(req, res, 'Аккаунт отключён — войдите заново');
+      }
+
+      req.panelUser = user;
+      const needed = url.startsWith('/api/') ? permissionFor(req.method, url.slice(4)) : 'panel.view';
+
+      if (!users.can(user, needed)) {
+        return res.status(403).json({
+          error: `Недостаточно прав: нужно «${users.PERMISSIONS[needed] || 'права владельца'}»`,
+          auth: 'forbidden',
+          needed
+        });
+      }
+      return next();
+    }
 
     // Сайт и бот ходят не мастер-ключом, а постоянным токеном: мастер-ключи
     // меняются при каждом запуске панели и для интеграций не годятся.
@@ -310,15 +405,19 @@ function middleware() {
     }
     if (token.error) return res.status(token.status || 403).json({ error: token.error, auth: 'token' });
 
-    // Браузеру отдаём страницу входа, программе — понятный отказ.
-    const wantsHtml = String(req.headers.accept || '').includes('text/html');
-    if (wantsHtml) {
-      res.setHeader('Location', '/login.html');
-      return res.status(302).end();
-    }
-
-    return res.status(401).json({ error: 'Требуется вход по мастер-ключу или API-токен', auth: 'required' });
+    return deny(req, res);
   };
+}
+
+/** Отказ во входе: браузеру — страница входа, программе — понятный JSON. */
+function deny(req, res, message) {
+  const wantsHtml = String(req.headers.accept || '').includes('text/html');
+  if (wantsHtml) {
+    res.setHeader('Location', '/login.html');
+    return res.status(302).end();
+  }
+
+  return res.status(401).json({ error: message || 'Требуется вход в панель', auth: 'required' });
 }
 
 /* ------------------------------------------------------------- API-токены */
@@ -450,12 +549,23 @@ function status(req) {
   const s = settings();
   const session = req ? sessionOf(req) : null;
 
+  const cfg = config.load();
+  const registration = (cfg.panel.auth && cfg.panel.auth.registration) || {};
+  const discordCfg = (cfg.panel.auth && cfg.panel.auth.discord) || {};
+
   return {
     required: s.enabled,
     mode: s.mode,
     loopback: s.loopback,
     host: s.host,
     https: tls().enabled,
+    // Первый запуск: аккаунтов нет, владельца создают по мастер-ключу.
+    setup: users.isEmpty(),
+    users: users.count(),
+    registration: Boolean(registration.enabled),
+    discord: Boolean(discordCfg.enabled && discordCfg.clientId && discordCfg.clientSecret),
+    // Пароль по открытому HTTP — повод предупредить прямо на странице входа.
+    insecure: !tls().enabled && !s.loopback,
     keyCount: keys.length,
     keysIssuedAt: generatedAt || null,
     sessionHours: sessionHours(),
@@ -535,6 +645,9 @@ function stop() {
 }
 
 module.exports = {
+  loginWithPassword,
+  userOf,
+  sessionForUser,
   start,
   stop,
   settings,

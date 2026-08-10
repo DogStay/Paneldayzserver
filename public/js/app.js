@@ -5,7 +5,7 @@
 
 import {
   state, on, navigate, connectStream,
-  refreshStatus, refreshConfig, refreshMods,
+  refreshStatus, refreshConfig, refreshMods, refreshMe,
   activeServer, activeStatus
 } from './store.js';
 import { api } from './api.js';
@@ -174,6 +174,8 @@ async function init() {
   connectStream();
 
   try {
+    // Права нужны раньше остального: по ним интерфейс решает, что показывать.
+    await refreshMe();
     await refreshStatus();
     await refreshConfig();
   } catch (err) {
