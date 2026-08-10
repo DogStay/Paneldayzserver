@@ -41,6 +41,7 @@ const users = require('../services/users');
 const discord = require('../services/discord');
 const permissions = require('../services/permissions');
 const db = require('../db');
+const roster = require('../services/roster');
 
 const router = express.Router();
 
@@ -829,6 +830,35 @@ function worldOf(serverId) {
   const v = config.active(serverId);
   return v.server.mission || '';
 }
+
+/* ------------------------------------------------- прописка игрока в файлы */
+
+/**
+ * Прописать игрока: вайтлист, фракция, свои списки.
+ *
+ * Отвечает сразу — задание уже на диске в очереди, поэтому потеряться не может,
+ * даже если файл сейчас занят сервером или панель перезапустят. Ровно это и
+ * лечит «человек прошёл проверку, а его не прописало».
+ */
+router.post(
+  '/roster/add',
+  wrap(async (req, res) => {
+    const serverId = serverIdOf(req);
+    const body = req.body || {};
+    const result = roster.enqueue(serverId, body);
+
+    adminlog.note(serverId, 'прописка', `в очередь: ${body.steamId}${body.name ? ` (${body.name})` : ''}`);
+    res.json(result);
+  })
+);
+
+/** Что настроено, что в очереди и почему не пишется. */
+router.get('/roster', (req, res) => res.json(roster.status(serverIdOf(req))));
+
+/** Прописан ли уже этот игрок — по всем целям. */
+router.get('/roster/check', (req, res) =>
+  res.json({ steamId: String(req.query.steamId || ''), targets: roster.check(serverIdOf(req), req.query.steamId) })
+);
 
 /* ------------------------------------------------------------ база данных */
 

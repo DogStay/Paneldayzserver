@@ -163,6 +163,17 @@
         "До планового перезапуска: {restart}."
       ]
     },
+    "roster": {
+      "targets": [
+        {
+          "id": "whitelist",
+          "title": "Вайтлист",
+          "file": "whitelist.txt",
+          "format": "lines",
+          "comment": true
+        }
+      ]
+    },
     "features": {
       "autoFirewall": true,
       "autoUpdateMods": true,

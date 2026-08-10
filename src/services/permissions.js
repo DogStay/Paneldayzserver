@@ -84,6 +84,9 @@ const RULES = [
   ['*', '/files', 'files.write'],
 
   // Прочее хозяйство панели.
+  // Прописка игрока меняет файлы сервера — это право файлов, не просмотра.
+  ['GET', '/roster', 'files.read'],
+  ['POST', '/roster/add', 'files.write'],
   ['GET', '/db', 'settings.view'],
   ['POST', '/db/init', 'settings.manage'],
   ['GET', '/config', 'settings.view'],

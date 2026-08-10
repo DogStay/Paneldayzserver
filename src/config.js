@@ -309,6 +309,22 @@ function normalize(cfg) {
       .map((text) => String(text).replace(/\s+/g, ' ').trim())
       .filter(Boolean);
 
+    /*
+     * Куда прописывать игрока после проверки: вайтлист, фракции, свои списки.
+     * Пути относительные считаются от папки профиля сервера.
+     */
+    s.roster = s.roster || {};
+    s.roster.targets = (Array.isArray(s.roster.targets) ? s.roster.targets : [])
+      .filter((t) => t && t.file)
+      .map((t, index) => ({
+        id: String(t.id || `target${index + 1}`).trim(),
+        title: String(t.title || t.file).slice(0, 60),
+        file: cleanPath(t.file),
+        format: ['lines', 'json-array', 'group-spawner'].includes(t.format) ? t.format : 'lines',
+        group: String(t.group || '').trim(),
+        comment: t.comment !== false
+      }));
+
     s.restart.warnMinutes = [...new Set(
       (Array.isArray(s.restart.warnMinutes) ? s.restart.warnMinutes : [])
         .map((n) => toInt(n, 0))
@@ -492,6 +508,7 @@ function view(serverId) {
     restart: instance.restart,
     ingame: instance.ingame,
     announcements: instance.announcements,
+    roster: instance.roster,
     features: instance.features,
     mods: instance.mods
   };
