@@ -89,6 +89,19 @@ const RULES = [
    * steam/callback) вход не требуют совсем — они в PUBLIC_PATHS: игрок панели не
    * принадлежит и логина в ней не имеет. Остальное — для бота и админа.
    */
+  /*
+   * Обращения. Читать — одно право, менять настройку и брать в работу — другое:
+   * человеку с доступом «только логи» переписка может быть нужна, а правка форм
+   * точно нет.
+   */
+  ['GET', '/tickets/config', 'tickets.view'],
+  ['PUT', '/tickets/config', 'tickets.manage'],
+  ['POST', '/tickets/config', 'tickets.manage'],
+  ['GET', /^\/tickets\/[^/]+$/, 'tickets.view'],
+  ['POST', /^\/tickets\/[^/]+\/(claim|close|thread|message)$/, 'tickets.manage'],
+  ['POST', '/tickets', 'tickets.manage'],
+  ['GET', '/tickets', 'tickets.view'],
+
   // В ответе настоящий токен бота, поэтому право такое же, как у настроек.
   ['GET', '/bot/config', 'settings.manage'],
 

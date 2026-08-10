@@ -220,6 +220,26 @@ export const api = {
   cfBan: (data) => request('POST', '/cftools/bans', data),
   cfUnban: (banId) => request('DELETE', `/cftools/bans/${encodeURIComponent(banId)}`),
 
+  /* Обращения (тикеты) */
+  ticketsConfig: () => request('GET', '/tickets/config'),
+  saveTicketsConfig: (patch) => request('PUT', '/tickets/config', patch),
+  tickets: (filters = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)).toString();
+    return request('GET', `/tickets${query ? `?${query}` : ''}`);
+  },
+  ticket: (id) => request('GET', `/tickets/${encodeURIComponent(id)}`),
+  claimTicket: (id) => request('POST', `/tickets/${encodeURIComponent(id)}/claim`, {}),
+  closeTicket: (id, reason) => request('POST', `/tickets/${encodeURIComponent(id)}/close`, { reason }),
+
+  /* Верификация: доказанные связки Discord и Steam */
+  verifyLinks: (limit) => request('GET', `/verify/links${limit ? `?limit=${limit}` : ''}`),
+  verifyStatusOf: (discordId) => request('GET', `/verify/status?discordId=${encodeURIComponent(discordId)}`),
+  verifyLink: (body) => request('POST', '/verify/link', body),
+  verifyUnlink: (discordId) => request('POST', '/verify/unlink', { discordId }),
+  rosterStatus: () => request('GET', '/roster'),
+  rosterCheck: (steamId) => request('GET', `/roster/check?steamId=${encodeURIComponent(steamId)}`),
+  rosterAdd: (body) => request('POST', '/roster/add', body),
+
   diagnostics: () => request('GET', '/diagnostics'),
   buildReport: () => request('POST', '/diagnostics', {}),
   readReport: (name) => request('GET', `/diagnostics/${encodeURIComponent(name)}`),

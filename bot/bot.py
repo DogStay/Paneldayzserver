@@ -17,7 +17,7 @@ Discord-бот панели.
     serverinfo   — /server, /online, живое сообщение статуса, статус бота
     admin        — /say, /restart-server, /player, /kick, /adminlog
     groups       — /groups, /group-members, /group-add
-    tickets      — /ticket, /close, /ticket-setup (приватные ветки)
+    tickets      — /tickets-panel, /close, /tickets (формы и тексты — из панели)
 
 Запуск:
     pip install -r requirements.txt
@@ -70,11 +70,24 @@ class PanelBot(discord.Client):
         self._views: list[discord.ui.View] = []
         self._tasks: list[asyncio.Task] = []
 
+        # Ветка Discord -> обращение. Нужна, чтобы складывать переписку в панель,
+        # не спрашивая её о каждом сообщении в ветке.
+        self.ticket_threads: dict[str, str] = {}
+        self.refresh_ticket_threads()
+
     # ------------------------------------------------------------ настройка
 
     def add_persistent_view(self, view: discord.ui.View) -> None:
         """Виды с кнопками регистрируются после подключения, а не сразу."""
         self._views.append(view)
+
+    def refresh_ticket_threads(self) -> None:
+        for item in ((self.settings.get("tickets") or {}).get("open") or []):
+            if item.get("threadId"):
+                self.ticket_threads[str(item["threadId"])] = item["id"]
+
+    def ticket_by_thread(self, thread_id: str) -> str:
+        return self.ticket_threads.get(str(thread_id), "")
 
     def main_guild(self) -> discord.Guild | None:
         guild_id = self.settings.get("guildId")
@@ -133,6 +146,13 @@ class PanelBot(discord.Client):
             if {k: v for k, v in self.settings.items() if k != "botToken"} != fresh:
                 LOG.info("Настройки в панели изменились — применяю")
                 self.settings.update(fresh)
+                self.refresh_ticket_threads()
+
+                # Кнопки обращений могли измениться: перерегистрируем их, иначе
+                # новая форма появится только после перезапуска бота.
+                from modules.tickets import OpenView
+
+                self.add_view(OpenView(self))
 
     async def log_to_channel(self, text: str) -> None:
         channel_id = self.settings.get("logChannelId")

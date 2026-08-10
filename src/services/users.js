@@ -65,6 +65,9 @@ const PERMISSIONS = {
   'settings.view': 'Смотреть настройки панели и сервера',
   'settings.manage': 'Менять настройки, карту, порты, брандмауэр',
 
+  'tickets.view': 'Читать обращения игроков и переписку по ним',
+  'tickets.manage': 'Настраивать формы обращений, брать и закрывать их',
+
   'users.manage': 'Управлять аккаунтами и правами',
   'tokens.manage': 'Выпускать API-токены для интеграций'
 };
@@ -102,7 +105,9 @@ const DEFAULT_ROLES = [
       'inventory.view',
       'inventory.edit',
       'events.view',
-      'ingame.say'
+      'ingame.say',
+      'tickets.view',
+      'tickets.manage'
     ],
     builtin: true
   },

@@ -44,6 +44,7 @@ const db = require('../db');
 const roster = require('../services/roster');
 const setup = require('../services/setup');
 const identity = require('../services/identity');
+const tickets = require('../services/tickets');
 const steamOpenId = require('../util/steamopenid');
 
 const router = express.Router();
@@ -951,6 +952,75 @@ router.post(
 /** Снять связку. */
 router.post('/verify/unlink', wrap(async (req, res) => res.json(await identity.unlink((req.body || {}).discordId))));
 
+/* ------------------------------------------------------------- обращения */
+
+/** Настройка обращений: формы, кнопки, роли, тексты. Читают панель, сайт и бот. */
+router.get('/tickets/config', (req, res) => res.json(tickets.config()));
+
+/** Сохранить настройку. Частично: пришли только формы — настройки не тронуты. */
+router.put('/tickets/config', (req, res) => res.json(tickets.saveConfig(req.body || {})));
+
+/** Список обращений с фильтрами: status, formId, search, limit. */
+router.get('/tickets', (req, res) => res.json(tickets.list(req.query)));
+
+/**
+ * Открыть обращение — это делает бот, когда человек заполнил форму.
+ *
+ * Запись создаётся до ветки Discord: если бот упадёт между шагами, обращение
+ * останется видно в панели, а не потеряется.
+ */
+router.post(
+  '/tickets',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    try {
+      res.json(tickets.create(body));
+    } catch (err) {
+      // У «уже есть открытое» есть данные, по которым бот покажет ссылку на него.
+      res.status(400).json({ error: err.message, tickets: err.tickets || [] });
+    }
+  })
+);
+
+/** Всё обращение целиком, вместе с перепиской. */
+router.get('/tickets/:id', (req, res) => {
+  const ticket = tickets.byId(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Обращение не найдено' });
+  res.json({ ticket, form: tickets.config().forms.find((f) => f.id === ticket.formId) || null });
+});
+
+/** Привязать созданную ветку Discord к записи. */
+router.post('/tickets/:id/thread', (req, res) =>
+  res.json(tickets.attachThread(req.params.id, (req.body || {}).threadId))
+);
+
+/** Взять в работу. */
+router.post('/tickets/:id/claim', (req, res) => {
+  const body = req.body || {};
+  const staff = body.staffId
+    ? { id: body.staffId, tag: body.staffTag }
+    : { id: req.panelUser ? req.panelUser.id : '', tag: req.panelUser ? req.panelUser.name : 'панель' };
+
+  res.json(tickets.claim(req.params.id, staff));
+});
+
+/** Закрыть. */
+router.post('/tickets/:id/close', (req, res) => {
+  const body = req.body || {};
+  const by = body.by || (req.panelUser ? req.panelUser.name : 'панель');
+  res.json(tickets.close(req.params.id, { by, reason: body.reason }));
+});
+
+/** Дописать сообщение переписки — этим бот сохраняет ветку для панели. */
+router.post('/tickets/:id/message', (req, res) => {
+  const body = req.body || {};
+  const ticket = tickets.byId(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Обращение не найдено' });
+
+  const saved = tickets.addMessage(ticket.threadId || req.params.id, body);
+  res.json({ ok: Boolean(saved), messages: saved ? saved.transcript.length : 0 });
+});
+
 /* ------------------------------------------------------------------- бот */
 
 /**
@@ -983,7 +1053,10 @@ router.get('/bot/config', (req, res) => {
     serverId: active ? active.id : '',
     serverName: active ? active.name : '',
     verifyTtlSeconds: Math.round(identity.TTL_MS / 1000),
-    roster: active ? roster.status(active.id).targets.map((t) => ({ id: t.id, title: t.title })) : []
+    roster: active ? roster.status(active.id).targets.map((t) => ({ id: t.id, title: t.title })) : [],
+    // Настройка обращений идёт боту сразу: иначе он делал бы второй запрос
+    // ради каждой перерисовки кнопок.
+    tickets: tickets.botView()
   });
 });
 

@@ -23,6 +23,8 @@ import { initDiagnosticsTab } from './diagnostics.js';
 import { initCFToolsTab } from './cftools.js';
 import { initMapTab } from './map.js';
 import { initEventLogTab } from './eventlog.js';
+import { initTicketsTab } from './tickets.js';
+import { initVerifyTab } from './verify.js';
 
 /*
  * У каждой вкладки указано право, без которого её незачем показывать: человеку с
@@ -35,6 +37,10 @@ const TABS = [
   // вкладки сами объясняют, как его подключить.
   { id: 'map', label: 'Карта', icon: 'map', permission: 'map.view' },
   { id: 'events', label: 'Логи', icon: 'file', permission: 'events.view' },
+  // Обращения и верификация — про людей, а не про сервер, поэтому стоят рядом
+  // и до технических вкладок.
+  { id: 'tickets', label: 'Обращения', icon: 'file', permission: 'tickets.view' },
+  { id: 'verify', label: 'Верификация', icon: 'shield', permission: 'players.view' },
   { id: 'mods', label: 'Модификации', icon: 'package', permission: 'mods.view' },
   { id: 'settings', label: 'Настройки сервера', icon: 'settings', permission: 'settings.view' },
   { id: 'cfg', label: 'Конфигурация', icon: 'file', permission: 'settings.view' },
@@ -73,6 +79,8 @@ export function initDashboardScreen() {
   initCFToolsTab($('#pane-cftools'));
   initMapTab($('#pane-map'));
   initEventLogTab($('#pane-events'));
+  initTicketsTab($('#pane-tickets'));
+  initVerifyTab($('#pane-verify'));
   initDiagnosticsTab($('#pane-diag'));
 
   on('config', syncOptionalTabs);
