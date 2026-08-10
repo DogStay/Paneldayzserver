@@ -84,6 +84,22 @@ const RULES = [
   ['*', '/files', 'files.write'],
 
   // Прочее хозяйство панели.
+  /*
+   * Верификация. Три маршрута из потока игрока (session, steam/start,
+   * steam/callback) вход не требуют совсем — они в PUBLIC_PATHS: игрок панели не
+   * принадлежит и логина в ней не имеет. Остальное — для бота и админа.
+   */
+  // В ответе настоящий токен бота, поэтому право такое же, как у настроек.
+  ['GET', '/bot/config', 'settings.manage'],
+
+  ['POST', '/verify/start', 'files.write'],
+  ['GET', '/verify/status', 'players.view'],
+  ['GET', '/verify/pending', 'players.view'],
+  ['POST', '/verify/ack', 'players.view'],
+  ['GET', '/verify/links', 'players.view'],
+  ['POST', '/verify/link', 'files.write'],
+  ['POST', '/verify/unlink', 'files.write'],
+
   // Прописка игрока меняет файлы сервера — это право файлов, не просмотра.
   ['GET', '/roster', 'files.read'],
   ['POST', '/roster/add', 'files.write'],

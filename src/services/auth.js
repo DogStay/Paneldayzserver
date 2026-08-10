@@ -366,7 +366,14 @@ const PUBLIC_PATHS = new Set([
   '/setup.html',
   '/js/setup.js',
   '/api/setup',
-  '/api/setup/database'
+  '/api/setup/database',
+  // Поток верификации игрока: он не пользователь панели и войти в неё не может.
+  // Защита здесь — одноразовый токен ссылки, выданный ботом лично игроку.
+  '/verify.html',
+  '/js/verify.js',
+  '/api/verify/session',
+  '/api/verify/steam/start',
+  '/api/verify/steam/callback'
 ]);
 
 function middleware() {

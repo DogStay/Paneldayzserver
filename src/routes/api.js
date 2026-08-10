@@ -43,6 +43,8 @@ const permissions = require('../services/permissions');
 const db = require('../db');
 const roster = require('../services/roster');
 const setup = require('../services/setup');
+const identity = require('../services/identity');
+const steamOpenId = require('../util/steamopenid');
 
 const router = express.Router();
 
@@ -860,6 +862,126 @@ router.get('/roster', (req, res) => res.json(roster.status(serverIdOf(req))));
 router.get('/roster/check', (req, res) =>
   res.json({ steamId: String(req.query.steamId || ''), targets: roster.check(serverIdOf(req), req.query.steamId) })
 );
+
+/* ------------------------------------------------------------- верификация */
+
+/*
+ * Начать верификацию. Это дёргает бот своим API-токеном.
+ *
+ * Ссылку бот обязан отправить игроку лично (ephemeral или в ЛС): открывший её
+ * привязывает свой Steam к тому Discord, для которого она выписана.
+ */
+router.post(
+  '/verify/start',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    res.json(identity.begin(body, req));
+  })
+);
+
+/** Состояние ссылки — этим живёт страница верификации. */
+router.get('/verify/session', (req, res) => res.json(identity.pageState(req.query.token)));
+
+/**
+ * Уход на Steam. Адрес возврата собирается здесь, а не в браузере: Steam
+ * сверяет его с realm, и подставленный чужой адрес сломал бы проверку.
+ */
+router.get('/verify/steam/start', (req, res) => {
+  const check = identity.sessionOf(req.query.token);
+  if (!check.ok) return res.status(400).json({ error: check.reason });
+
+  const scheme = auth.tls().enabled ? 'https' : 'http';
+  const realm = `${scheme}://${req.headers.host}`;
+  const returnTo = `${realm}/api/verify/steam/callback?token=${encodeURIComponent(check.session.token)}`;
+
+  res.redirect(steamOpenId.loginUrl(returnTo, realm));
+});
+
+/** Возврат от Steam: проверяем ответ у самого Steam и закрываем верификацию. */
+router.get(
+  '/verify/steam/callback',
+  wrap(async (req, res) => {
+    const token = String(req.query.token || '');
+    const result = await steamOpenId.verify(req.query);
+
+    if (!result.ok) return res.redirect(`/verify.html?token=${encodeURIComponent(token)}&error=${encodeURIComponent(result.reason)}`);
+
+    // Ник берём из Steam, а не из поля ввода: так его нельзя выдумать.
+    let nickname = '';
+    try {
+      nickname = await steamOpenId.profileName(result.steamId, config.load().steam.webApiKey);
+    } catch (err) {
+      logger.warn('verify', `Ник из Steam не получен: ${err.message}`);
+    }
+
+    try {
+      await identity.completeSteam(token, result.steamId, nickname);
+    } catch (err) {
+      return res.redirect(`/verify.html?token=${encodeURIComponent(token)}&error=${encodeURIComponent(err.message)}`);
+    }
+
+    res.redirect(`/verify.html?token=${encodeURIComponent(token)}&done=1`);
+  })
+);
+
+/** Верифицирован ли игрок. Спрашивает бот и сайт. */
+router.get(
+  '/verify/status',
+  wrap(async (req, res) => res.json(await identity.status({ discordId: req.query.discordId, steamId: req.query.steamId })))
+);
+
+/** Кому бот ещё не выдал роль — страховка на случай, если он падал. */
+router.get('/verify/pending', (req, res) => res.json({ pending: identity.pendingSessions() }));
+
+/** Бот отметил, что роль выдана. */
+router.post('/verify/ack', (req, res) => res.json(identity.acknowledge((req.body || {}).discordId)));
+
+/** Все связки — для сайта и для проверки глазами. */
+router.get('/verify/links', wrap(async (req, res) => res.json({ links: await identity.all(req.query.limit) })));
+
+/** Связать вручную: бывает нужно, когда у игрока нет входа в Steam в браузере. */
+router.post(
+  '/verify/link',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    res.json(await identity.link({ ...body, actor: req.panelUser ? req.panelUser.login : 'токен' }));
+  })
+);
+
+/** Снять связку. */
+router.post('/verify/unlink', wrap(async (req, res) => res.json(await identity.unlink((req.body || {}).discordId))));
+
+/* ------------------------------------------------------------------- бот */
+
+/**
+ * Настройки для Discord-бота.
+ *
+ * Так у владельца одно место настройки: он вписывает токен бота и ID в мастере
+ * настройки панели, а боту нужны только адрес панели и API-токен. Второй копии
+ * настроек, которая разъезжается с первой, больше нет.
+ *
+ * Отдаётся только токену со правами admin: здесь настоящий токен бота.
+ */
+router.get('/bot/config', (req, res) => {
+  if (req.panelToken && req.panelToken.scope !== 'admin') {
+    return res.status(403).json({ error: 'Нужен API-токен с правами admin: в ответе токен бота' });
+  }
+
+  const cfg = config.load();
+  const d = cfg.panel.discord || {};
+  const active = config.activeServer();
+
+  res.json({
+    botToken: d.botToken || '',
+    guildId: d.guildId || '',
+    verifiedRoleId: d.verifiedRoleId || '',
+    logChannelId: d.logChannelId || '',
+    serverId: active ? active.id : '',
+    serverName: active ? active.name : '',
+    verifyTtlSeconds: Math.round(identity.TTL_MS / 1000),
+    roster: active ? roster.status(active.id).targets.map((t) => ({ id: t.id, title: t.title })) : []
+  });
+});
 
 /* --------------------------------------------------- мастер настройки (localhost) */
 

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Верификация</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>✅</text></svg>">
+
+  <!--
+    Страницу открывает игрок, а не админ: он не входит в панель и ничего о ней
+    не знает. Поэтому здесь один экран, одна кнопка и понятный текст, и никакой
+    зависимости от файлов интерфейса панели.
+  -->
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #131a22;
+      --line: #1f2a35;
+      --text: #dbe4ee;
+      --dim: #8b9bab;
+      --acc: #3fb950;
+      --danger: #e5484d;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+      background: radial-gradient(1200px 600px at 50% -10%, #16212c 0%, var(--bg) 60%);
+      color: var(--text);
+    }
+    .card {
+      width: 100%; max-width: 460px; background: var(--surface);
+      border: 1px solid var(--line); border-radius: 16px; padding: 30px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); text-align: center;
+    }
+    .big { font-size: 38px; margin-bottom: 10px; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { font-size: 14px; color: var(--dim); line-height: 1.5; margin: 0 0 18px; }
+    .steam {
+      display: inline-flex; align-items: center; gap: 10px; justify-content: center;
+      width: 100%; padding: 14px 18px; font-size: 15px; cursor: pointer;
+      color: #fff; background: #1b2838; border: 1px solid #2a475e; border-radius: 10px;
+      text-decoration: none;
+    }
+    .steam:hover { border-color: #66c0f4; }
+    .err { color: var(--danger); font-size: 13.5px; margin-top: 16px; }
+    .ok { color: var(--acc); }
+    .small { font-size: 12px; color: var(--dim); margin-top: 18px; }
+    code { background: #0f151c; border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font-size: 12.5px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="big">⏳</div>
+    <h1>Проверяю ссылку…</h1>
+  </div>
+
+  <script type="module" src="/js/verify.js"></script>
+</body>
+</html>

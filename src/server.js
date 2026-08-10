@@ -26,6 +26,7 @@ const bridge = require('./services/bridge');
 const adminlog = require('./services/adminlog');
 const roster = require('./services/roster');
 const setup = require('./services/setup');
+const identity = require('./services/identity');
 const auth = require('./services/auth');
 const firewall = require('./services/firewall');
 const access = require('./services/access');
@@ -149,6 +150,7 @@ httpServer.listen(port, host, () => {
   bridge.start();
   adminlog.start();
   roster.start();
+  identity.start();
   logger.info('panel', '═'.repeat(60));
 });
 
@@ -225,6 +227,7 @@ async function shutdown(signal) {
   bridge.stop();
   adminlog.stop();
   roster.stop();
+  identity.stop();
   auth.stop();
   await serverProcess.shutdown();
   httpServer.close(() => process.exit(0));
