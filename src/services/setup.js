@@ -27,9 +27,12 @@ const discord = require('./discord');
 const bridge = require('./bridge');
 const maptiles = require('./maptiles');
 const roster = require('./roster');
+const trader = require('./trader');
 
 /** Ключ секции конфига -> куда писать: корень или активный сервер. */
-const SERVER_SECTIONS = new Set(['server', 'restart', 'ingame', 'announcements', 'features', 'roster', 'paths', 'cftools', 'mods']);
+const SERVER_SECTIONS = new Set([
+  'server', 'restart', 'ingame', 'announcements', 'features', 'roster', 'trader', 'paths', 'cftools', 'mods'
+]);
 
 /** Секции, которые в конфиге есть и у корня, и у сервера. Пишем в сервер. */
 const BOTH_SECTIONS = new Set(['paths', 'cftools']);
@@ -127,6 +130,16 @@ const STEPS = [
     ]
   },
   {
+    id: 'trader',
+    title: 'Трейдер (MAODev Trade System)',
+    hint: 'Папка с файлами торговца. Относительный путь считается от папки профиля сервера.',
+    needsServer: true,
+    fields: [
+      { path: 'trader.path', label: 'Папка Trade System', type: 'text',
+        hint: 'Например MAODev_Project/MAODev_Trade_System. Внутри должны быть Traders_list.json и trader_category_list' }
+    ]
+  },
+  {
     id: 'discord',
     title: 'Discord',
     hint: 'Вход в панель через Discord и связь с ботом.',
@@ -151,7 +164,9 @@ const STEPS = [
       { path: 'panel.discord.staffRoleId', label: 'ID роли поддержки', type: 'text',
         hint: 'Кого звать в тикет' },
       { path: 'panel.discord.adminRoleId', label: 'ID роли админов', type: 'text',
-        hint: 'Кому доступны команды управления сервером из Discord' }
+        hint: 'Кому доступны команды управления сервером из Discord' },
+      { path: 'panel.discord.traderRoleIds', label: 'ID ролей для админки трейдера', type: 'list',
+        hint: 'Кому доступна правка категорий, товаров и цен. Несколько — через запятую' }
     ]
   },
   {
@@ -256,6 +271,8 @@ function valueFor(field, root, serverView) {
   // Секрет наружу не уходит — только признак, что он задан.
   if (field.type === 'secret') return { set: Boolean(value), value: '' };
   if (field.type === 'roster') return { value: Array.isArray(value) ? value : [] };
+  // Список id хранится массивом, а в поле показывается через запятую.
+  if (field.type === 'list') return { value: (Array.isArray(value) ? value : []).join(', ') };
   if (field.type === 'bool') return { value: Boolean(value) };
 
   return { value: value === undefined || value === null ? '' : value };
@@ -328,6 +345,16 @@ function checklist(server) {
 
     const r = roster.status(server.id);
     add('roster', 'Прописка настроена', r.targets.length ? 'ok' : 'warn', r.reason);
+
+    // Трейдер необязателен, поэтому «off», а не «fail», когда путь не указан.
+    const t = trader.status(server.id);
+    add(
+      'trader',
+      'Трейдер',
+      t.ok ? (t.issues.length ? 'warn' : 'ok') : (v.trader && v.trader.path ? 'fail' : 'off'),
+      t.ok ? (t.issues.length ? `поломок в файлах: ${t.issues.length}` : `торговцев ${t.traders.length}`) : t.reason,
+      t.ok ? '' : 'Укажите папку Trade System ниже'
+    );
   }
 
   add('owner', 'Владелец панели создан', users.isEmpty() ? 'fail' : 'ok',
@@ -391,6 +418,11 @@ function apply(payload = {}) {
 
     if (field.type === 'bool') { put(field, Boolean(raw)); continue; }
     if (field.type === 'number') { put(field, Number(raw) || 0); continue; }
+
+    if (field.type === 'list') {
+      put(field, String(raw == null ? '' : raw).split(/[\s,;]+/).filter(Boolean));
+      continue;
+    }
 
     if (field.type === 'roster') {
       const list = (Array.isArray(raw) ? raw : []).filter((t) => t && t.file);

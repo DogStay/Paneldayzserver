@@ -65,6 +65,9 @@ const PERMISSIONS = {
   'settings.view': 'Смотреть настройки панели и сервера',
   'settings.manage': 'Менять настройки, карту, порты, брандмауэр',
 
+  'trader.view': 'Смотреть торговцев, категории и цены',
+  'trader.manage': 'Править категории, товары и цены торговцев',
+
   'tickets.view': 'Читать обращения игроков и переписку по ним',
   'tickets.manage': 'Настраивать формы обращений, брать и закрывать их',
 
@@ -107,7 +110,8 @@ const DEFAULT_ROLES = [
       'events.view',
       'ingame.say',
       'tickets.view',
-      'tickets.manage'
+      'tickets.manage',
+      'trader.view'
     ],
     builtin: true
   },

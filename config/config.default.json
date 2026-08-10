@@ -50,7 +50,8 @@
       "statusChannelId": "",
       "ticketChannelId": "",
       "staffRoleId": "",
-      "adminRoleId": ""
+      "adminRoleId": "",
+      "traderRoleIds": []
     },
     "tls": {
       "enabled": false,
@@ -172,6 +173,9 @@
         "Вы играете на сервере {server} — карта {map}.",
         "До планового перезапуска: {restart}."
       ]
+    },
+    "trader": {
+      "path": "MAODev_Project/MAODev_Trade_System"
     },
     "roster": {
       "targets": [

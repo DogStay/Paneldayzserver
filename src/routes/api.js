@@ -45,6 +45,7 @@ const roster = require('../services/roster');
 const setup = require('../services/setup');
 const identity = require('../services/identity');
 const tickets = require('../services/tickets');
+const trader = require('../services/trader');
 const steamOpenId = require('../util/steamopenid');
 
 const router = express.Router();
@@ -952,6 +953,47 @@ router.post(
 /** Снять связку. */
 router.post('/verify/unlink', wrap(async (req, res) => res.json(await identity.unlink((req.body || {}).discordId))));
 
+/* --------------------------------------------------------------- трейдер */
+
+/*
+ * MAODev Trade System. Панель правит файлы торговца, потому что они лежат рядом
+ * с сервером; бот и сайт делают это через эти маршруты.
+ *
+ * Ошибки правки — это не «сломалась панель», а «так делать нельзя» (нулевое
+ * количество, занятый classname, назначенная категория), поэтому отвечаем 400 с
+ * человеческим текстом, а не 500.
+ */
+const traderCall = (handler) => (req, res) => {
+  try {
+    res.json(handler(req));
+  } catch (err) {
+    if (err instanceof trader.TraderError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+};
+
+/** Общее состояние: путь, торговцы, категории, валюты, найденные поломки. */
+router.get('/trader', (req, res) => res.json(trader.status(serverIdOf(req))));
+
+/** Товары одной категории. */
+router.get('/trader/products', traderCall((req) => trader.products(serverIdOf(req), req.query.category, req.query.kind)));
+
+/** Проверка всех файлов торговца. */
+router.get('/trader/validate', traderCall((req) => trader.validateAll(serverIdOf(req))));
+
+router.post('/trader/categories', traderCall((req) => trader.createCategory(serverIdOf(req), req.body || {})));
+router.post('/trader/categories/delete', traderCall((req) => trader.deleteCategory(serverIdOf(req), req.body || {})));
+
+router.post('/trader/products', traderCall((req) => trader.addProduct(serverIdOf(req), req.body || {})));
+router.post('/trader/products/update', traderCall((req) => trader.updateProduct(serverIdOf(req), req.body || {})));
+router.post('/trader/products/delete', traderCall((req) => trader.deleteProduct(serverIdOf(req), req.body || {})));
+
+router.post('/trader/assign', traderCall((req) => trader.assignCategory(serverIdOf(req), req.body || {})));
+router.post('/trader/unassign', traderCall((req) => trader.removeCategory(serverIdOf(req), req.body || {})));
+
+/** Полная копия папки торговца — перед крупными правками. */
+router.post('/trader/backup', traderCall((req) => trader.fullBackup(serverIdOf(req))));
+
 /* ------------------------------------------------------------- обращения */
 
 /** Настройка обращений: формы, кнопки, роли, тексты. Читают панель, сайт и бот. */
@@ -1050,6 +1092,7 @@ router.get('/bot/config', (req, res) => {
     ticketChannelId: d.ticketChannelId || '',
     staffRoleId: d.staffRoleId || '',
     adminRoleId: d.adminRoleId || '',
+    traderRoleIds: d.traderRoleIds || [],
     serverId: active ? active.id : '',
     serverName: active ? active.name : '',
     verifyTtlSeconds: Math.round(identity.TTL_MS / 1000),

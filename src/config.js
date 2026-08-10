@@ -244,6 +244,18 @@ function normalize(cfg) {
   c.panel.discord.ticketChannelId = String(c.panel.discord.ticketChannelId || '').trim();
   c.panel.discord.staffRoleId = String(c.panel.discord.staffRoleId || '').trim();
   c.panel.discord.adminRoleId = String(c.panel.discord.adminRoleId || '').trim();
+  // Кому в Discord доступна админка трейдера. Отдельно от админов сервера:
+  // цены обычно ведёт не тот, кто перезапускает сервер.
+  c.panel.discord.traderRoleIds = [
+    ...new Set(
+      (Array.isArray(c.panel.discord.traderRoleIds)
+        ? c.panel.discord.traderRoleIds
+        : String(c.panel.discord.traderRoleIds || '').split(/[\s,;]+/)
+      )
+        .map((v) => String(v).trim())
+        .filter((v) => /^\d{5,32}$/.test(v))
+    )
+  ];
 
   c.panel.tls = c.panel.tls || {};
   c.panel.tls.enabled = Boolean(c.panel.tls.enabled);
@@ -323,6 +335,13 @@ function normalize(cfg) {
     s.announcements.messages = (Array.isArray(s.announcements.messages) ? s.announcements.messages : [])
       .map((text) => String(text).replace(/\s+/g, ' ').trim())
       .filter(Boolean);
+
+    /*
+     * Папка MAODev Trade System. Относительный путь считается от папки профиля:
+     * у большинства она лежит внутри профиля сервера.
+     */
+    s.trader = s.trader || {};
+    s.trader.path = cleanPath(s.trader.path);
 
     /*
      * Куда прописывать игрока после проверки: вайтлист, фракции, свои списки.
@@ -524,6 +543,7 @@ function view(serverId) {
     ingame: instance.ingame,
     announcements: instance.announcements,
     roster: instance.roster,
+    trader: instance.trader,
     features: instance.features,
     mods: instance.mods
   };

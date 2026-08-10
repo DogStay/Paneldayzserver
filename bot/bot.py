@@ -18,6 +18,7 @@ Discord-бот панели.
     admin        — /say, /restart-server, /player, /kick, /adminlog
     groups       — /groups, /group-members, /group-add
     tickets      — /tickets-panel, /close, /tickets (формы и тексты — из панели)
+    trader       — /trader-admin, /trader-price, /trader-validate, /trader-list
 
 Запуск:
     pip install -r requirements.txt
@@ -36,11 +37,11 @@ import discord
 from discord import app_commands
 
 from panel import Panel, PanelError
-from modules import admin, groups, serverinfo, tickets, verification
+from modules import admin, groups, serverinfo, tickets, trader, verification
 
 LOG = logging.getLogger("panelbot")
 
-MODULES = (verification, serverinfo, admin, groups, tickets)
+MODULES = (verification, serverinfo, admin, groups, tickets, trader)
 
 
 def load_env() -> None:
