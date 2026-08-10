@@ -84,6 +84,8 @@ const RULES = [
   ['*', '/files', 'files.write'],
 
   // Прочее хозяйство панели.
+  ['GET', '/db', 'settings.view'],
+  ['POST', '/db/init', 'settings.manage'],
   ['GET', '/config', 'settings.view'],
   ['PUT', '/config', 'settings.manage'],
   ['*', '/firewall', 'settings.manage'],

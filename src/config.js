@@ -217,6 +217,19 @@ function normalize(cfg) {
   c.panel.map.tiles.urlTemplate = String(c.panel.map.tiles.urlTemplate || '').trim();
   c.panel.map.tiles.attribution = String(c.panel.map.tiles.attribution || '').trim();
 
+  /*
+   * Общая база с сайтом и Discord-ботом. Выключена по умолчанию: панель обязана
+   * работать и без неё, на файлах, иначе обновление сломало бы рабочую панель.
+   */
+  c.panel.database = c.panel.database || {};
+  c.panel.database.enabled = Boolean(c.panel.database.enabled);
+  c.panel.database.host = String(c.panel.database.host || '127.0.0.1').trim();
+  c.panel.database.port = clamp(toInt(c.panel.database.port, 3306), 1, 65535);
+  c.panel.database.user = String(c.panel.database.user || 'root').trim();
+  c.panel.database.password = String(c.panel.database.password || '');
+  c.panel.database.name = String(c.panel.database.name || 'tfl_bot').trim();
+  c.panel.database.charset = String(c.panel.database.charset || 'utf8mb4').trim();
+
   c.panel.tls = c.panel.tls || {};
   c.panel.tls.enabled = Boolean(c.panel.tls.enabled);
   c.panel.tls.certFile = cleanPath(c.panel.tls.certFile);
@@ -537,6 +550,12 @@ function publicView() {
 
   copy.cftools.secret = '';
   copy.cftools.hasSecret = Boolean(cfg.cftools.secret);
+
+  // Пароль базы — такая же тайна, как пароль Steam.
+  if (copy.panel.database) {
+    copy.panel.database.password = '';
+    copy.panel.database.hasPassword = Boolean(cfg.panel.database.password);
+  }
 
   // Секрет приложения Discord — такая же тайна, как пароль Steam.
   if (copy.panel.auth && copy.panel.auth.discord) {

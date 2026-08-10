@@ -40,6 +40,7 @@ const adminlog = require('../services/adminlog');
 const users = require('../services/users');
 const discord = require('../services/discord');
 const permissions = require('../services/permissions');
+const db = require('../db');
 
 const router = express.Router();
 
@@ -528,6 +529,9 @@ router.put(
     if (patch.panel && patch.panel.auth && patch.panel.auth.discord && patch.panel.auth.discord.clientSecret === '') {
       delete patch.panel.auth.discord.clientSecret;
     }
+    if (patch.panel && patch.panel.database && patch.panel.database.password === '') {
+      delete patch.panel.database.password;
+    }
     delete patch.servers;
     delete patch.activeServerId;
 
@@ -825,6 +829,20 @@ function worldOf(serverId) {
   const v = config.active(serverId);
   return v.server.mission || '';
 }
+
+/* ------------------------------------------------------------ база данных */
+
+/** Связь с общей базой сайта и бота: что видно и почему не подключается. */
+router.get('/db', wrap(async (req, res) => res.json(await db.status())));
+
+/** Создать таблицы панели (panel_*). Чужие таблицы не трогаются. */
+router.post(
+  '/db/init',
+  wrap(async (req, res) => {
+    await db.ensureSchema(true);
+    res.json(await db.status());
+  })
+);
 
 /** Читаются ли логи VPPAdminTools и где они лежат. */
 router.get('/adminlog', (req, res) => res.json(adminlog.status(serverIdOf(req))));
