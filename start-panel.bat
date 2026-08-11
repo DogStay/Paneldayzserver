@@ -29,8 +29,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "node_modules\express" (
-    echo Первый запуск: устанавливаю зависимости, нужен интернет...
+rem Проверяем каждую зависимость, а не только express: mysql2 добавился позже,
+rem и у тех, кто обновился через git pull без npm install, панель падала на
+rem старте из-за отсутствующего модуля.
+set "NEED_INSTALL="
+if not exist "node_modules\express" set "NEED_INSTALL=1"
+if not exist "node_modules\mysql2" set "NEED_INSTALL=1"
+
+if defined NEED_INSTALL (
+    echo Устанавливаю зависимости панели, нужен интернет...
     echo.
     call npm install --omit=dev
     if errorlevel 1 (

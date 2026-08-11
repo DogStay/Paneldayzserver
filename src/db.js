@@ -18,12 +18,41 @@
  *     выключают и включают, и панель от этого падать не должна.
  */
 
-const mysql = require('mysql2/promise');
-
-const config = require('./config');
 const logger = require('./logger');
 
 const SOURCE = 'db';
+
+/*
+ * mysql2 подключается лениво и намеренно.
+ *
+ * База необязательна, а зависимость появилась позже панели: у людей, которые
+ * обновились через git pull и не сделали npm install, обычный require наверху
+ * ронял всю панель ещё до старта — из-за выключенной возможности. Теперь модуль
+ * ищется только когда база включена, а его отсутствие превращается в понятную
+ * причину рядом с настройкой базы.
+ */
+let mysql = null;
+let mysqlMissing = '';
+
+function loadDriver() {
+  if (mysql) return mysql;
+  if (mysqlMissing) throw new Error(mysqlMissing);
+
+  try {
+    // eslint-disable-next-line global-require
+    mysql = require('mysql2/promise');
+  } catch (err) {
+    mysqlMissing =
+      'не установлен модуль mysql2. Закройте панель и выполните в её папке ' +
+      '«npm install» (или запустите install.bat), затем включите базу заново';
+    logger.warn(SOURCE, mysqlMissing);
+    throw new Error(mysqlMissing);
+  }
+
+  return mysql;
+}
+
+const config = require('./config');
 
 let pool = null;
 /** Настройки, на которых создан текущий пул: сменились — пересоздаём. */
@@ -66,7 +95,7 @@ function getPool() {
     previous.end().catch(() => {});
   }
 
-  pool = mysql.createPool({
+  pool = loadDriver().createPool({
     host: s.host,
     port: s.port,
     user: s.user,
